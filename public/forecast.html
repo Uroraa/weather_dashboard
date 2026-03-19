@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Forecast - ESP32 Sensor Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <i class="ph-fill ph-cpu"></i>
+                <span>IoT Monitor</span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="index.html" class="nav-item"><i class="ph ph-squares-four"></i>
+<span>Dashboard</span>
+</a>
+                <a href="devices.html" class="nav-item"><i class="ph ph-devices"></i>
+<span>Devices</span>
+</a>
+                <a href="alerts.html" class="nav-item"><i class="ph ph-bell-ringing"></i>
+<span>Alerts</span>
+</a>
+                <a href="forecast.html" class="nav-item active"><i class="ph ph-cloud-sun"></i>
+<span>Forecast</span>
+</a>
+                
+                <a href="admin.html" class="nav-item admin-nav" id="admin-nav" style="display: none;"><i class="ph ph-shield-check"></i>
+<span>Admin Portal</span>
+</a>
+            </nav>
+        </aside>
+
+        <div class="main-wrapper">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="menu-toggle" id="menu-toggle"><i class="ph ph-list"></i></button>
+                    <h2 style="font-size: 1.2rem; font-weight: 600; margin-left: 1rem;">Forecast Analytics</h2>
+                </div>
+            </header>
+
+            <main class="content">
+                <div class="card" style="text-align: center; padding: 4rem 2rem; max-width: 600px; margin: 2rem auto;">
+                    <i class="ph ph-robot" style="font-size: 5rem; color: var(--primary-color); margin-bottom: 1rem;"></i>
+                    <h2 style="margin-bottom: 1rem; color: var(--text-main);">AI Forecasting Model</h2>
+                    <p style="color: var(--text-muted); line-height: 1.6; margin-bottom: 2rem;">
+                        This module is currently in development. Future updates will allow you to plug in an ML model to predict temperature and humidity trends based on your historical sensor data.
+                    </p>
+                    
+                    <div style="border: 2px dashed #cbd5e0; padding: 2rem; border-radius: 1rem; background: #f7fafc;">
+                        <i class="ph ph-upload-simple" style="font-size: 2rem; color: #a0aec0; margin-bottom: 0.5rem;"></i>
+                        <p style="color: var(--text-muted); font-size: 0.875rem;">Model Upload Area (Coming Soon)</p>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+    <script src="/assets/js/common.js"></script>
+</body>
+</html>

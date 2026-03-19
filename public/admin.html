@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Portal - ESP32 Sensor Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header"><i class="ph-fill ph-cpu"></i><span>IoT Monitor</span></div>
+            <nav class="sidebar-nav">
+                <a href="index.html" class="nav-item"><i class="ph ph-squares-four"></i>
+<span>Dashboard</span>
+</a>
+                <a href="devices.html" class="nav-item"><i class="ph ph-devices"></i>
+<span>Devices</span>
+</a>
+                <a href="alerts.html" class="nav-item"><i class="ph ph-bell-ringing"></i>
+<span>Alerts</span>
+</a>
+                <a href="forecast.html" class="nav-item"><i class="ph ph-cloud-sun"></i>
+<span>Forecast</span>
+</a>
+                
+                <a href="admin.html" class="nav-item active admin-nav" id="admin-nav"><i class="ph ph-shield-check"></i>
+<span>Admin Portal</span>
+</a>
+            </nav>
+        </aside>
+
+        <div class="main-wrapper">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="menu-toggle" id="menu-toggle"><i class="ph ph-list"></i></button>
+                    <h2 style="font-size: 1.2rem; font-weight: 600; margin-left: 1rem; color: var(--danger-color);"><i class="ph-fill ph-shield-check"></i> System Administrator</h2>
+                </div>
+            </header>
+
+            <main class="content">
+                <div id="unauth-msg" style="display:none;" class="card">
+                    <p class="text-danger"><i class="ph ph-warning-circle"></i> Access Denied. Admin privileges required.</p>
+                </div>
+
+                <div id="admin-content" style="display:none;">
+                    <div class="card" style="margin-bottom: 2rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 1rem;">
+                            <h3 style="margin: 0;"><i class="ph ph-users"></i> User Management</h3>
+                            <div>
+                                <label style="font-size:0.875rem; margin-right:0.5rem;">Rows:</label>
+                                <select id="user-page-size" onchange="changeUserPageSize(this.value)" style="padding:0.25rem; border-radius:4px; border:1px solid #e2e8f0;">
+                                    <option value="5">5</option>
+                                    <option value="10">10</option>
+                                    <option value="15">15</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Name</th>
+                                        <th>Email</th>
+                                        <th>Role</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="users-tbody"></tbody>
+                            </table>
+                        </div>
+                        <div id="user-pagination" style="display:flex; justify-content:flex-end; gap:0.5rem; margin-top:1rem; align-items:center;"></div>
+                    </div>
+
+                    <div class="card">
+                        <h3 style="margin-bottom: 1rem;"><i class="ph ph-devices"></i> All System Devices</h3>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Device Name</th>
+                                        <th>Owner</th>
+                                        <th>API Key</th>
+                                        <th>Created</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="devices-tbody"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/assets/js/common.js"></script>
+    <script>
+        let allUsers = [];
+        let usersPage = 1;
+        let usersPageSize = 5;
+
+        async function loadAdminData() {
+            const user = Auth.getUser();
+            if(!user || user.role !== 'admin') {
+                document.getElementById('unauth-msg').style.display = 'block';
+                return;
+            }
+
+            document.getElementById('admin-content').style.display = 'block';
+
+            try {
+                // Load Users
+                const usersRes = await apiFetch('/api/users');
+                if(usersRes.ok) {
+                    allUsers = await usersRes.json();
+                    renderUsers();
+                }
+
+                // Load Devices
+                const devRes = await apiFetch('/api/devices');
+                if(devRes.ok) {
+                    const devices = await devRes.json();
+                    document.getElementById('devices-tbody').innerHTML = devices.map(d => `
+                        <tr>
+                            <td>${d.id}</td>
+                            <td>${d.name}</td>
+                            <td>${d.owner_name}</td>
+                            <td style="font-family:monospace; font-size:0.75rem;">${d.api_key.substring(0,8)}...</td>
+                            <td>${new Date(d.created_at).toLocaleDateString()}</td>
+                            <td>
+                                <button class="btn btn-danger" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="deleteDev(${d.id})"><i class="ph ph-trash"></i></button>
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+
+            } catch(e) { console.error(e); }
+        }
+
+        function renderUsers() {
+            const start = (usersPage - 1) * usersPageSize;
+            const paginated = allUsers.slice(start, start + usersPageSize);
+            
+            document.getElementById('users-tbody').innerHTML = paginated.map(u => `
+                <tr>
+                    <td>${u.id}</td>
+                    <td>${u.name}</td>
+                    <td>${u.email}</td>
+                    <td><span class="badge" style="background:${u.role==='admin'?'#fed7d7':'#edf2f7'}; color:${u.role==='admin'?'#c53030':'#4a5568'};">${u.role}</span></td>
+                    <td>${new Date(u.created_at).toLocaleDateString()}</td>
+                    <td>
+                        <button class="btn btn-outline" style="padding:0.2rem 0.5rem; font-size:0.75rem; border-color:#e2e8f0; ${u.role === 'admin' ? 'opacity:0.3; cursor:not-allowed;' : ''}" ${u.role === 'admin' ? 'disabled title="Cannot change admin role"' : `onclick="toggleRole(${u.id}, '${u.role}')"`}>Toggle Role</button>
+                        <button class="btn btn-danger" style="padding:0.2rem 0.5rem; font-size:0.75rem;" onclick="deleteUser(${u.id})"><i class="ph ph-trash"></i></button>
+                    </td>
+                </tr>
+            `).join('');
+
+            const totalPages = Math.ceil(allUsers.length / usersPageSize);
+            document.getElementById('user-pagination').innerHTML = `
+                <button class="btn btn-outline" style="padding:0.2rem 0.5rem; font-size:0.875rem;" ${usersPage === 1 ? 'disabled' : ''} onclick="changeUserPage(-1)">Prev</button>
+                <span style="font-size:0.875rem; color:var(--text-muted); white-space:nowrap;">Page ${usersPage} of ${totalPages || 1}</span>
+                <button class="btn btn-outline" style="padding:0.2rem 0.5rem; font-size:0.875rem;" ${usersPage >= totalPages ? 'disabled' : ''} onclick="changeUserPage(1)">Next</button>
+            `;
+        }
+
+        window.changeUserPageSize = function(size) {
+            usersPageSize = parseInt(size, 10);
+            usersPage = 1;
+            renderUsers();
+        };
+
+        window.changeUserPage = function(dir) {
+            usersPage += dir;
+            renderUsers();
+        };
+
+        async function toggleRole(id, currentRole) {
+            const newRole = currentRole === 'admin' ? 'user' : 'admin';
+            if(!confirm(`Change role to ${newRole}?`)) return;
+            try {
+                await apiFetch(`/api/users/${id}/role`, { method: 'PUT', body: JSON.stringify({role: newRole}) });
+                loadAdminData();
+            } catch(e){}
+        }
+
+        async function deleteUser(id) {
+            if(!confirm("Are you sure? This will delete the user and ALL their devices/data permanently.")) return;
+            try {
+                await apiFetch(`/api/users/${id}`, { method: 'DELETE' });
+                loadAdminData();
+            } catch(e){}
+        }
+
+        async function deleteDev(id) {
+            if(!confirm("Delete this device for its owner?")) return;
+            try {
+                await apiFetch(`/api/devices/${id}`, { method: 'DELETE' });
+                loadAdminData();
+            } catch(e){}
+        }
+
+        document.addEventListener('DOMContentLoaded', loadAdminData);
+    </script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Alerts - ESP32 Sensor Monitor</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        .alert-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+            padding: 1.25rem;
+            border-bottom: 1px solid #edf2f7;
+            transition: var(--transition);
+        }
+        .alert-item:hover {
+            background: #fbfdff;
+        }
+        .alert-item:last-child { border-bottom: none; }
+        
+        .alert-icon {
+            font-size: 2rem;
+            color: var(--danger-color);
+            background: rgba(229, 62, 62, 0.1);
+            padding: 0.5rem;
+            border-radius: 50%;
+        }
+        
+        .alert-content { flex: 1; }
+        .alert-title { font-weight: 700; margin-bottom: 0.25rem; color: var(--text-main); }
+        .alert-desc { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.5rem; }
+        .alert-meta { display: flex; gap: 1rem; font-size: 0.8rem; color: #a0aec0; }
+        
+        .badge {
+            padding: 0.2rem 0.5rem; border-radius: 1rem; font-size: 0.75rem; font-weight: 600; text-transform: uppercase;
+        }
+        .badge-new { background: #fed7d7; color: #c53030; }
+        .badge-ack { background: #e6fffa; color: #2c7a7b; }
+    </style>
+</head>
+<body>
+    <div class="app-layout">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <i class="ph-fill ph-cpu"></i>
+                <span>IoT Monitor</span>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="index.html" class="nav-item"><i class="ph ph-squares-four"></i>
+<span>Dashboard</span>
+</a>
+                <a href="devices.html" class="nav-item"><i class="ph ph-devices"></i>
+<span>Devices</span>
+</a>
+                <a href="alerts.html" class="nav-item active"><i class="ph ph-bell-ringing"></i>
+<span>Alerts</span>
+</a>
+                <a href="forecast.html" class="nav-item"><i class="ph ph-cloud-sun"></i>
+<span>Forecast</span>
+</a>
+                
+                <a href="admin.html" class="nav-item admin-nav" id="admin-nav" style="display: none;"><i class="ph ph-shield-check"></i>
+<span>Admin Portal</span>
+</a>
+            </nav>
+        </aside>
+
+        <div class="main-wrapper">
+            <header class="topbar">
+                <div class="topbar-left">
+                    <button class="menu-toggle" id="menu-toggle"><i class="ph ph-list"></i></button>
+                    <h2 style="font-size: 1.2rem; font-weight: 600; margin-left: 1rem;">System Alerts</h2>
+                </div>
+                <!-- Fix Avatar Bug: Missing topbar-right -->
+                <div class="topbar-right"></div>
+            </header>
+
+            <main class="content">
+                <div id="unauth-msg" style="display:none;" class="card">
+                    <p class="text-danger"><i class="ph ph-warning-circle"></i> You must be logged in to view alerts.</p>
+                </div>
+
+                <div class="card" id="alerts-container" style="display:none; padding: 0;">
+                    <div style="padding: 1.5rem; border-bottom: 1px solid #edf2f7; display: flex; justify-content: space-between; align-items: center;">
+                        <h3 style="margin:0;"><i class="ph ph-warning-circle"></i> Recent Alerts</h3>
+                        <div style="display: flex; gap: 1.5rem; align-items: center;">
+                            <div id="alerts-pagination-top" style="display:flex; align-items:center; gap:0.5rem;"></div>
+                            <button class="btn btn-outline" onclick="loadAlerts()"><i class="ph ph-arrows-clockwise"></i> Refresh</button>
+                        </div>
+                    </div>
+                    
+                    <div id="alerts-list">
+                        <!-- Alerts Injected Here -->
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="/assets/js/common.js"></script>
+    <script>
+        let allAlerts = [];
+        let alertsPage = 1;
+        let alertsPageSize = 5;
+
+        async function acknowledgeAlert(id) {
+            try {
+                const res = await apiFetch(`/api/alerts/${id}/acknowledge`, { method: 'PUT' });
+                if(res.ok) loadAlerts();
+            } catch(e) { console.error(e); }
+        }
+
+        async function loadAlerts() {
+            if (!Auth.isAuthenticated()) {
+                document.getElementById('unauth-msg').style.display = 'block';
+                return;
+            }
+
+            try {
+                document.getElementById('alerts-container').style.display = 'block';
+                const list = document.getElementById('alerts-list');
+                list.innerHTML = '<div style="padding: 2rem; text-align:center; color:#a0aec0;">Loading...</div>';
+
+                const res = await apiFetch('/api/alerts');
+                if (!res.ok) throw new Error();
+                allAlerts = await res.json();
+                renderAlertsList();
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('alerts-list').innerHTML = '<div style="padding: 2rem; text-align:center; color:#e53e3e;">Failed to load alerts</div>';
+            }
+        }
+
+        function renderAlertsList() {
+            const list = document.getElementById('alerts-list');
+            if (allAlerts.length === 0) {
+                list.innerHTML = `
+                    <div style="padding: 4rem 2rem; text-align: center;">
+                        <i class="ph ph-check-circle" style="font-size: 4rem; color: var(--success-color); margin-bottom: 1rem;"></i>
+                        <h3>All Clear</h3>
+                        <p style="color: var(--text-muted);">There are no recent alerts for your devices.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const start = (alertsPage - 1) * alertsPageSize;
+            const paginated = allAlerts.slice(start, start + alertsPageSize);
+
+            list.innerHTML = paginated.map(a => {
+                const isAck = !!a.acknowledged_at;
+                const date = new Date(a.timestamp).toLocaleString();
+                const badge = isAck ? '<span class="badge badge-ack">Acknowledged</span>' : '<span class="badge badge-new">New</span>';
+                const btnHtml = !isAck ? `<button class="btn btn-outline" style="padding:0.3rem 0.8rem; font-size:0.875rem;" onclick="acknowledgeAlert(${a.id})">Acknowledge</button>` : '';
+
+                return `
+                    <div class="alert-item">
+                        <i class="ph ph-warning alert-icon" style="${isAck ? 'color:#a0aec0; background:#edf2f7;' : ''}"></i>
+                        <div class="alert-content">
+                            <div class="alert-title">${a.device_name} ${badge}</div>
+                            <div class="alert-desc">${a.message}</div>
+                            <div class="alert-meta">
+                                <span><i class="ph ph-clock"></i> ${date}</span>
+                                <span>Type: ${a.type}</span>
+                                ${isAck ? `<span><i class="ph ph-check"></i> ${new Date(a.acknowledged_at).toLocaleString()}</span>` : ''}
+                            </div>
+                        </div>
+                        <div>
+                            ${btnHtml}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const totalPages = Math.ceil(allAlerts.length / alertsPageSize);
+            const pagTop = document.getElementById('alerts-pagination-top');
+            if (pagTop) {
+                pagTop.innerHTML = `
+                    <label style="font-size:0.875rem; color:var(--text-muted);">Rows:</label>
+                    <select onchange="changeAlertsPageSize(this.value)" style="padding:0.25rem 1.5rem 0.25rem 0.5rem; border:1px solid #e2e8f0; border-radius:4px; font-size:0.875rem; background:white; cursor:pointer;">
+                        <option value="5" ${alertsPageSize===5?'selected':''}>5</option>
+                        <option value="10" ${alertsPageSize===10?'selected':''}>10</option>
+                        <option value="15" ${alertsPageSize===15?'selected':''}>15</option>
+                    </select>
+                    <div style="display:flex; align-items:center; gap:0.25rem; margin-left:0.5rem;">
+                        <button class="btn btn-outline" style="padding:0.25rem 0.5rem; font-size:0.875rem;" ${alertsPage <= 1 ? 'disabled' : ''} onclick="changeAlertsPage(-1)">Prev</button>
+                        <span style="font-size:0.875rem; color:var(--text-muted); padding:0 0.25rem; white-space:nowrap;">${alertsPage} / ${totalPages || 1}</span>
+                        <button class="btn btn-outline" style="padding:0.25rem 0.5rem; font-size:0.875rem;" ${alertsPage >= totalPages ? 'disabled' : ''} onclick="changeAlertsPage(1)">Next</button>
+                    </div>
+                `;
+            }
+        }
+
+        window.changeAlertsPageSize = function(size) {
+            alertsPageSize = parseInt(size, 10);
+            alertsPage = 1;
+            renderAlertsList();
+        };
+
+        window.changeAlertsPage = function(dir) {
+            alertsPage += dir;
+            renderAlertsList();
+        };
+
+        document.addEventListener('DOMContentLoaded', loadAlerts);
+    </script>
+</body>
+</html>
