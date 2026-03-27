@@ -12,6 +12,14 @@ const globalStatusText = document.getElementById('global-status-text');
 let currentDeviceId = null;
 let socket = null;
 let sensorChart = null;
+let offlineTimer = null;
+
+function setOfflineTimer() {
+    if (offlineTimer) clearTimeout(offlineTimer);
+    offlineTimer = setTimeout(() => {
+        updateConnectionStatus('offline');
+    }, 60000); // 60s
+}
 
 // Initialize Chart.js exactly like the design spec required
 function initChart() {
@@ -87,12 +95,18 @@ function initChart() {
     });
 }
 
-function updateConnectionStatus(isConnected) {
-    if (isConnected) {
-        globalStatusDot.classList.add('live');
+function updateConnectionStatus(status) {
+    if (status === 'online') {
+        globalStatusDot.className = 'status-dot live';
+        globalStatusDot.style.backgroundColor = ''; // Remove any inline override
         globalStatusText.innerText = 'Live connected';
+    } else if (status === 'offline') {
+        globalStatusDot.className = 'status-dot';
+        globalStatusDot.style.backgroundColor = '#a0aec0'; // Gray dot
+        globalStatusText.innerText = 'Offline';
     } else {
-        globalStatusDot.classList.remove('live');
+        globalStatusDot.className = 'status-dot';
+        globalStatusDot.style.backgroundColor = '';
         globalStatusText.innerText = 'Disconnected';
     }
 }
@@ -112,6 +126,14 @@ function animateValueChange(element, newValue, isFloat = false) {
 }
 
 async function loadDevices() {
+    if (!Auth.isAuthenticated()) {
+        dashboardContent.style.display = 'none';
+        noDeviceMsg.innerHTML = '<p class="text-danger"><i class="ph ph-warning-circle"></i> Please log in to view dashboard data.</p>';
+        noDeviceMsg.style.display = 'block';
+        deviceSelector.disabled = true;
+        return;
+    }
+
     try {
         const res = await apiFetch('/api/devices');
         if (!res.ok) throw new Error('Failed to load devices');
@@ -155,6 +177,13 @@ async function loadDeviceData(deviceId) {
             const latest = data[data.length - 1];
             animateValueChange(tempValueEl, latest.temperature, true);
             animateValueChange(humValueEl, latest.humidity, false);
+
+            if (Date.now() - new Date(latest.timestamp).getTime() < 60000) {
+                updateConnectionStatus('online');
+                setOfflineTimer();
+            } else {
+                updateConnectionStatus('offline');
+            }
 
             const labels = [];
             const temps = [];
@@ -208,13 +237,17 @@ function setupSocket(deviceId) {
         });
 
         socket.on('disconnect', () => {
-            updateConnectionStatus(false);
+            updateConnectionStatus('disconnected');
         });
 
         // Listen for new readings targeted at this device
         socket.on('new_reading', (reading) => {
             if (reading.device_id.toString() !== currentDeviceId.toString()) return;
             
+            // Re-affirm live status since real data arrived
+            updateConnectionStatus('online');
+            setOfflineTimer();
+
             animateValueChange(tempValueEl, reading.temperature, true);
             animateValueChange(humValueEl, reading.humidity, false);
 

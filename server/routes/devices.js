@@ -10,15 +10,25 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
         let devicesRes;
         if (req.user && req.user.role === 'admin') {
             devicesRes = await db.query(`
-                SELECT d.*, u.name as owner_name 
+                SELECT d.*, u.name as owner_name, 
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
                 FROM devices d 
                 JOIN users u ON d.owner_user_id = u.id 
                 ORDER BY d.created_at DESC
             `);
         } else if (req.user) {
-            devicesRes = await db.query('SELECT * FROM devices WHERE owner_user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+            devicesRes = await db.query(`
+                SELECT d.*, 
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
+                FROM devices d 
+                WHERE owner_user_id = $1 ORDER BY created_at DESC
+            `, [req.user.id]);
         } else {
-            devicesRes = await db.query('SELECT * FROM devices ORDER BY created_at DESC');
+            devicesRes = await db.query(`
+                SELECT d.*, 
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
+                FROM devices d ORDER BY created_at DESC
+            `);
         }
         res.json(devicesRes.rows);
     } catch (err) {

@@ -77,12 +77,6 @@ class AlertService {
         }
 
         try {
-            const adminRes = await db.query("SELECT email FROM users WHERE role = 'admin'");
-            adminRes.rows.forEach(admin => {
-                if (admin.email && !recipients.includes(admin.email)) {
-                    recipients.push(admin.email);
-                }
-            });
             
             for (const email of recipients) {
                 await emailService.sendAlertEmail(email, device.name, type, value, threshold);

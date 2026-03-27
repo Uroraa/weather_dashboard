@@ -87,7 +87,7 @@
             <header class="topbar">
                 <div class="topbar-left">
                     <button class="menu-toggle" id="menu-toggle"><i class="ph ph-list"></i></button>
-                    <h2 style="font-size: 1.2rem; font-weight: 600; margin-left: 1rem;">My Devices</h2>
+                    <h2 id="devices-page-header" style="font-size: 1.2rem; font-weight: 600; margin-left: 1rem;">My Devices</h2>
                 </div>
                 <div class="topbar-right">
                     <button class="btn btn-primary" onclick="openAddDeviceModal()"><i class="ph ph-plus"></i> Add Device</button>
@@ -176,7 +176,42 @@
     </div>
 
     <script src="/assets/js/common.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
     <script>
+        const deviceTimers = {};
+
+        function setDeviceOffline(id) {
+            const badge = document.getElementById(`status-badge-${id}`);
+            if (badge) {
+                badge.innerText = 'Offline';
+                badge.style.background = '#e2e8f0';
+                badge.style.color = '#4a5568';
+            }
+        }
+
+        function setDeviceOnline(id) {
+            const badge = document.getElementById(`status-badge-${id}`);
+            if (badge) {
+                badge.innerText = 'Online';
+                badge.style.background = '#c6f6d5';
+                badge.style.color = '#22543d';
+            }
+            if(deviceTimers[id]) clearTimeout(deviceTimers[id]);
+            deviceTimers[id] = setTimeout(() => setDeviceOffline(id), 60000);
+        }
+
+        let globalSocket = null;
+        function initGlobalSocket() {
+            if(!Auth.isAuthenticated()) return;
+            globalSocket = io();
+            globalSocket.on('connect', () => {
+                globalSocket.emit('authenticate', Auth.getToken());
+            });
+            globalSocket.on('new_reading', (r) => {
+                setDeviceOnline(r.device_id);
+            });
+        }
+
         function openAddDeviceModal() {
             if(!Auth.isAuthenticated()) return alert("Please log in first.");
             document.getElementById('add-device-modal').classList.add('active');
@@ -262,17 +297,27 @@
                 if (!res.ok) throw new Error();
                 const devices = await res.json();
                 
+                if (Auth.getUser().role === 'admin') {
+                    document.getElementById('devices-page-header').innerText = 'Devices';
+                }
+
                 const grid = document.getElementById('devices-grid');
                 grid.innerHTML = '';
                 grid.style.display = 'grid';
 
                 devices.forEach(d => {
                     const notifyBadge = d.notify_email ? `<span style="font-size: 0.75rem; background:#38a169; color:white; padding: 0.1rem 0.4rem; border-radius:1rem;">Email On</span>` : '';
+                    const ownerBadge = (Auth.getUser().role === 'admin' && d.owner_name) ? `<span style="font-size: 0.75rem; color:#718096; margin-left: 0.5rem;">Owner: ${d.owner_name}</span>` : '';
                     
+                    const isOnline = d.last_reading && (Date.now() - new Date(d.last_reading).getTime() < 60000);
+                    const statusBadge = isOnline ? 
+                        `<span id="status-badge-${d.id}" style="font-size: 0.75rem; background:#c6f6d5; color:#22543d; padding: 0.1rem 0.4rem; border-radius:1rem; margin-left: 0.5rem;">Online</span>` : 
+                        `<span id="status-badge-${d.id}" style="font-size: 0.75rem; background:#e2e8f0; color:#4a5568; padding: 0.1rem 0.4rem; border-radius:1rem; margin-left: 0.5rem;">Offline</span>`;
+
                     grid.innerHTML += `
                         <div class="card device-card">
                             <div class="device-card-header">
-                                <span class="device-title"><i class="ph ph-cpu"></i> ${d.name} ${notifyBadge}</span>
+                                <span class="device-title"><i class="ph ph-cpu"></i> ${d.name} ${notifyBadge} ${statusBadge} ${ownerBadge}</span>
                             </div>
                             <p style="color:var(--text-muted); font-size: 0.875rem;">${d.description || 'No description'}</p>
                             
@@ -293,13 +338,22 @@
                             </div>
                         </div>
                     `;
+                    
+                    // Resume decay timer for online devices
+                    if(isOnline) {
+                        const remaining = 60000 - (Date.now() - new Date(d.last_reading).getTime());
+                        deviceTimers[d.id] = setTimeout(() => setDeviceOffline(d.id), remaining);
+                    }
                 });
             } catch (err) {
                 console.error(err);
             }
         }
 
-        document.addEventListener('DOMContentLoaded', loadMyDevices);
+        document.addEventListener('DOMContentLoaded', () => {
+            loadMyDevices();
+            initGlobalSocket();
+        });
     </script>
 </body>
 </html>

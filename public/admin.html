@@ -126,7 +126,8 @@
                 const devRes = await apiFetch('/api/devices');
                 if(devRes.ok) {
                     const devices = await devRes.json();
-                    document.getElementById('devices-tbody').innerHTML = devices.map(d => `
+                    const sortedDevices = devices.sort((a,b) => a.id - b.id);
+                    document.getElementById('devices-tbody').innerHTML = sortedDevices.map(d => `
                         <tr>
                             <td>${d.id}</td>
                             <td>${d.name}</td>

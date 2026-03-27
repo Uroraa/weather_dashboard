@@ -73,7 +73,7 @@ async function initializeDb() {
 
 async function seedDatabase() {
     try {
-        const { rows } = await pool.query('SELECT id FROM users WHERE email = $1', ['admin@example.com']);
+        const { rows } = await pool.query("SELECT id FROM users WHERE role = 'admin' LIMIT 1");
         if (rows.length === 0) {
             console.log("Seeding Postgres database...");
             const adminPass = await bcrypt.hash('Admin123!', 10);
