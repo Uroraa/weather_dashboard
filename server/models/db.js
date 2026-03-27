@@ -21,7 +21,7 @@ async function initializeDb() {
                 email VARCHAR(255) UNIQUE NOT NULL,
                 password VARCHAR(255) NOT NULL,
                 role VARCHAR(50) DEFAULT 'user',
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
@@ -37,7 +37,7 @@ async function initializeDb() {
                 temp_low REAL,
                 hum_high REAL,
                 hum_low REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
@@ -47,7 +47,7 @@ async function initializeDb() {
                 device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
                 temperature REAL NOT NULL,
                 humidity REAL NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
@@ -59,8 +59,8 @@ async function initializeDb() {
                 value REAL NOT NULL,
                 message TEXT NOT NULL,
                 acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
-                acknowledged_at TIMESTAMP,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                acknowledged_at TIMESTAMP WITH TIME ZONE,
+                timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
 
