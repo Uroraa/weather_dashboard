@@ -71,6 +71,11 @@ io.on('connection', (socket) => {
     });
 });
 
+const mqttService = require('./services/mqttService');
+
+// Start Local MQTT Broker
+mqttService.initMqtt(io, alertService);
+
 // Start the server
 server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
