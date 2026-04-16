@@ -16,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../public')));
+app.use(express.static(path.join(__dirname, '../frontend/dist')));
 
 // Attach io and services to app so routes can use them
 app.set('io', io);
@@ -77,6 +77,11 @@ const mqttService = require('./services/mqttService');
 mqttService.initMqtt(io, alertService);
 
 // Start the server
+// SPA Fallback for generic GET routes (make sure to define this AFTER API routes)
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, '../frontend/dist/index.html'));
+});
+
 server.listen(PORT, () => {
     console.log(`Server is running on http://localhost:${PORT}`);
 });
