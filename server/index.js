@@ -28,7 +28,9 @@ const usersRoutes = require('./routes/users');
 const devicesRoutes = require('./routes/devices');
 const dataRoutes = require('./routes/data');
 const alertsRoutes = require('./routes/alerts');
+const forecastRoutes = require('./routes/forecast')
 
+app.use('/api/forecast', forecastRoutes)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/devices', devicesRoutes);
@@ -74,7 +76,7 @@ io.on('connection', (socket) => {
 const mqttService = require('./services/mqttService');
 
 // Start Local MQTT Broker
-mqttService.initMqtt(io, alertService);
+mqttService.initMqtt(io, alertService).catch(err => console.error('[MQTT] Failed to start broker:', err));
 
 // Start the server
 // SPA Fallback for generic GET routes (make sure to define this AFTER API routes)

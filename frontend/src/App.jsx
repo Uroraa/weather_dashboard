@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { ConnectionProvider } from './context/ConnectionContext';
 import Layout from './components/Layout';
 // Import pages (we will create them next)
 import Dashboard from './pages/Dashboard';
@@ -14,6 +15,7 @@ import Account from './pages/Account';
 function App() {
   return (
     <AuthProvider>
+      <ConnectionProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<Layout />}>
@@ -27,6 +29,7 @@ function App() {
           </Route>
         </Routes>
       </BrowserRouter>
+      </ConnectionProvider>
     </AuthProvider>
   );
 }

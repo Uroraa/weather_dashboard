@@ -1,57 +1,54 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useConnection } from '../context/ConnectionContext';
 import { io } from 'socket.io-client';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Line } from 'react-chartjs-2';
 
+const MAX_CHART_POINTS = 30;
+
 export default function DeviceDetails() {
     const { isAuthenticated, apiFetch, token } = useAuth();
+    const { markDeviceOnline, markDeviceOffline } = useConnection();
     const [searchParams] = useSearchParams();
     const deviceId = searchParams.get('id');
 
     const [device, setDevice] = useState(null);
     const [loading, setLoading] = useState('Loading...');
-    const [status, setStatus] = useState('disconnected');
-    
+
     const [temperature, setTemperature] = useState('--');
     const [humidity, setHumidity] = useState('--');
-    
-    // Tab State
-    const [activeTab, setActiveTab] = useState('chart');
 
-    // Chart & Data State
+    const [activeTab, setActiveTab] = useState('chart');
     const [historyData, setHistoryData] = useState([]);
     const [allAlerts, setAllAlerts] = useState([]);
 
-    // Pagination
+    // Live chart data — starts empty, fills from real-time socket only
+    const [liveChartData, setLiveChartData] = useState({
+        labels: Array(MAX_CHART_POINTS).fill(''),
+        datasets: [
+            { label: 'Temp', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#e53e3e', yAxisID: 'y', tension: 0.4 },
+            { label: 'Hum', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 }
+        ]
+    });
+
     const [histPage, setHistPage] = useState(1);
     const [histPageSize, setHistPageSize] = useState(10);
     const [alertsPage, setAlertsPage] = useState(1);
     const [alertsPageSize, setAlertsPageSize] = useState(5);
 
     const socketRef = useRef(null);
-    const offlineTimerRef = useRef(null);
-
-    const setOfflineTimer = () => {
-        if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
-        offlineTimerRef.current = setTimeout(() => {
-            setStatus('offline');
-        }, 60000);
-    };
 
     const loadDevice = async () => {
         try {
             const res = await apiFetch(`/api/devices/${deviceId}`);
-            if(!res.ok) {
-                setLoading('Device not found or access denied');
-                return;
-            }
+            if (!res.ok) { setLoading('Device not found or access denied'); return; }
             const data = await res.json();
             setDevice(data);
             setLoading('');
             await loadReadings();
             await loadAlerts();
-        } catch(e) {
+        } catch (e) {
             console.error(e);
         }
     };
@@ -59,34 +56,29 @@ export default function DeviceDetails() {
     const loadReadings = async () => {
         try {
             const res = await apiFetch(`/api/devices/${deviceId}/readings?limit=100`);
-            if(res.ok) {
+            if (res.ok) {
                 const data = await res.json();
+                // History table gets all readings
                 setHistoryData(data);
-                
-                if(data.length > 0) {
-                    const latest = data[data.length-1];
+
+                // Set latest values for the metric cards
+                if (data.length > 0) {
+                    const latest = data[data.length - 1];
                     setTemperature(latest.temperature);
                     setHumidity(latest.humidity);
-
-                    if (Date.now() - new Date(latest.timestamp).getTime() < 60000) {
-                        setStatus('online');
-                        setOfflineTimer();
-                    } else {
-                        setStatus('offline');
-                    }
                 }
             }
-        } catch(e) { console.error(e); }
+        } catch (e) { console.error(e); }
     };
 
     const loadAlerts = async () => {
         try {
             const res = await apiFetch(`/api/alerts/device/${deviceId}`);
-            if(res.ok) {
+            if (res.ok) {
                 const data = await res.json();
                 setAllAlerts(data);
             }
-        } catch(e) {}
+        } catch (e) {}
     };
 
     useEffect(() => {
@@ -97,35 +89,59 @@ export default function DeviceDetails() {
 
         loadDevice();
 
+        // Start as offline — socket events will set online immediately
+        markDeviceOffline(deviceId);
+
         socketRef.current = io('/');
         socketRef.current.on('connect', () => {
-            if(token) socketRef.current.emit('authenticate', token);
+            if (token) socketRef.current.emit('authenticate', token);
             socketRef.current.emit('subscribe_device', deviceId);
         });
 
-        socketRef.current.on('disconnect', () => {
-            setStatus('disconnected');
-        });
+        socketRef.current.on('disconnect', () => markDeviceOffline(deviceId));
 
         socketRef.current.on('new_reading', (r) => {
-            if(r.device_id.toString() !== deviceId.toString()) return;
+            if (r.device_id.toString() !== deviceId.toString()) return;
 
-            setStatus('online');
-            setOfflineTimer();
+            // Immediately mark online
+            markDeviceOnline(deviceId, r.source);
 
             setTemperature(r.temperature);
             setHumidity(r.humidity);
-            
+
+            // Add to history table
             setHistoryData(prev => {
                 const newData = [...prev, r];
-                if(newData.length > 100) newData.shift();
+                if (newData.length > 100) newData.shift();
                 return newData;
+            });
+
+            // Append to live chart from the right
+            setLiveChartData(prev => {
+                const labels = [...prev.labels];
+                const temps = [...prev.datasets[0].data];
+                const hums = [...prev.datasets[1].data];
+
+                labels.shift(); temps.shift(); hums.shift();
+
+                labels.push(new Date(r.timestamp || Date.now()).toLocaleTimeString());
+                temps.push(r.temperature);
+                hums.push(r.humidity);
+
+                return {
+                    ...prev,
+                    labels,
+                    datasets: [
+                        { ...prev.datasets[0], data: temps },
+                        { ...prev.datasets[1], data: hums }
+                    ]
+                };
             });
         });
 
         return () => {
             if (socketRef.current) socketRef.current.disconnect();
-            if (offlineTimerRef.current) clearTimeout(offlineTimerRef.current);
+            markDeviceOffline(deviceId);
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [deviceId, isAuthenticated, token]);
@@ -143,20 +159,11 @@ export default function DeviceDetails() {
         a.click();
     };
 
-    const dataToChart = historyData.slice(-30);
-    const chartData = {
-        labels: dataToChart.map(d => new Date(d.timestamp).toLocaleTimeString()),
-        datasets: [
-            { label: 'Temp', data: dataToChart.map(d => d.temperature), borderColor: '#e53e3e', yAxisID: 'y', tension: 0.4 },
-            { label: 'Hum', data: dataToChart.map(d => d.humidity), borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 }
-        ]
-    };
-
     const chartOptions = {
         responsive: true, maintainAspectRatio: false,
-        scales: { 
-            y: { type: 'linear', position: 'left' }, 
-            y1: { type: 'linear', position: 'right', grid: {drawOnChartArea: false} } 
+        scales: {
+            y: { type: 'linear', position: 'left' },
+            y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false } }
         }
     };
 
@@ -169,16 +176,9 @@ export default function DeviceDetails() {
     return (
         <>
             <div style={{ position: 'absolute', top: '15px', right: '120px', zIndex: 100 }}>
-                {/* Normally we have back button in header left, but for identical DOM it's fine. Wait, topbar left has back button. I'll just render it absolutely. */}
                 <Link to="/devices" className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', background: 'white' }}>
                     <i className="ph ph-arrow-left"></i> <span>Back</span>
                 </Link>
-                <div className="status-indicator" style={{ display: 'inline-flex', marginLeft: '1rem', background: 'white' }}>
-                    <span className={`status-dot ${status === 'online' ? 'live' : ''}`} style={{ backgroundColor: status === 'offline' ? '#a0aec0' : (status === 'disconnected' ? 'gray' : '') }}></span>
-                    <span style={{ fontSize: '0.875rem', marginLeft: '0.5rem', color: 'var(--text-muted)' }}>
-                        {status === 'online' ? 'Live connected' : (status === 'offline' ? 'Offline' : 'Disconnected')}
-                    </span>
-                </div>
             </div>
 
             {loading ? (
@@ -189,7 +189,7 @@ export default function DeviceDetails() {
                         <div>
                             <h1 className="page-title" id="dev-name" style={{ margin: 0 }}>{device.name}</h1>
                             <div className="device-info" style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginTop: '0.5rem' }}>
-                                <span id="dev-desc">{device.description || 'No description'}</span> • 
+                                <span id="dev-desc">{device.description || 'No description'}</span> •
                                 Created: <span id="dev-created">{new Date(device.created_at).toLocaleDateString()}</span>
                             </div>
                         </div>
@@ -208,14 +208,24 @@ export default function DeviceDetails() {
 
                     <div className="card" style={{ marginBottom: '2rem' }}>
                         <div className="tab-group" style={{ display: 'flex', borderBottom: '1px solid #edf2f7', marginBottom: '1.5rem', gap: '2rem' }}>
-                            <div className={`tab ${activeTab === 'chart' ? 'active' : ''}`} onClick={() => setActiveTab('chart')} style={activeTab === 'chart' ? { color: 'var(--primary-color)', borderBottom: '2px solid var(--primary-color)'} : { color: 'var(--text-muted)', fontWeight: 600, cursor: 'pointer', borderBottom: '2px solid transparent', padding: '0.5rem 0' }}>Live Chart</div>
-                            <div className={`tab ${activeTab === 'history' ? 'active' : ''}`} onClick={() => setActiveTab('history')} style={activeTab === 'history' ? { color: 'var(--primary-color)', borderBottom: '2px solid var(--primary-color)'} : { color: 'var(--text-muted)', fontWeight: 600, cursor: 'pointer', borderBottom: '2px solid transparent', padding: '0.5rem 0' }}>History Table</div>
-                            <div className={`tab ${activeTab === 'alerts' ? 'active' : ''}`} onClick={() => { setActiveTab('alerts'); loadAlerts(); }} style={activeTab === 'alerts' ? { color: 'var(--primary-color)', borderBottom: '2px solid var(--primary-color)'} : { color: 'var(--text-muted)', fontWeight: 600, cursor: 'pointer', borderBottom: '2px solid transparent', padding: '0.5rem 0' }}>Alerts</div>
+                            {['chart', 'history', 'alerts'].map(tab => (
+                                <div
+                                    key={tab}
+                                    className={`tab ${activeTab === tab ? 'active' : ''}`}
+                                    onClick={() => { setActiveTab(tab); if (tab === 'alerts') loadAlerts(); }}
+                                    style={activeTab === tab
+                                        ? { color: 'var(--primary-color)', borderBottom: '2px solid var(--primary-color)', fontWeight: 600, cursor: 'pointer', padding: '0.5rem 0' }
+                                        : { color: 'var(--text-muted)', fontWeight: 600, cursor: 'pointer', borderBottom: '2px solid transparent', padding: '0.5rem 0' }
+                                    }
+                                >
+                                    {tab === 'chart' ? 'Live Chart' : tab === 'history' ? 'History Table' : 'Alerts'}
+                                </div>
+                            ))}
                         </div>
 
                         {activeTab === 'chart' && (
                             <div className="chart-container">
-                                <Line data={chartData} options={chartOptions} />
+                                <Line data={liveChartData} options={chartOptions} />
                             </div>
                         )}
 
@@ -242,7 +252,7 @@ export default function DeviceDetails() {
                                                 <tr key={i}>
                                                     <td>{new Date(d.timestamp).toLocaleString()}</td>
                                                     <td><span className="text-danger">{d.temperature}</span></td>
-                                                    <td><span className="text-primary" style={{ color: '#3182ce' }}>{d.humidity}</span></td>
+                                                    <td><span style={{ color: '#3182ce' }}>{d.humidity}</span></td>
                                                 </tr>
                                             ))}
                                         </tbody>

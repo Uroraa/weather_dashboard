@@ -35,7 +35,7 @@ router.post('/', async (req, res) => {
             [device.id, temperature, humidity, time]
         );
 
-        const newReading = { device_id: device.id, temperature, humidity, timestamp: time };
+        const newReading = { device_id: device.id, temperature, humidity, timestamp: time, source: 'sensor' };
 
         // 2. Alert Generation Logic
         const io = req.app.get('io');
