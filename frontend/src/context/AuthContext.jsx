@@ -24,11 +24,13 @@ export const AuthProvider = ({ children }) => {
     setToken(newToken);
     setUser(newUser);
     setIsAuthenticated(true);
+    localStorage.setItem('loginTime', Date.now().toString());
   };
 
   const logout = () => {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('user');
+    localStorage.removeItem('loginTime');
     setToken(null);
     setUser(null);
     setIsAuthenticated(false);

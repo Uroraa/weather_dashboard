@@ -23,7 +23,6 @@ export default function DeviceDetails() {
     const [historyData, setHistoryData] = useState([]);
     const [allAlerts, setAllAlerts] = useState([]);
 
-    // Live chart data — starts empty, fills from real-time socket only
     const [liveChartData, setLiveChartData] = useState({
         labels: Array(MAX_CHART_POINTS).fill(''),
         datasets: [
@@ -58,7 +57,7 @@ export default function DeviceDetails() {
             const res = await apiFetch(`/api/devices/${deviceId}/readings?limit=100`);
             if (res.ok) {
                 const data = await res.json();
-                // History table gets all readings
+                // History table gets all readings (unchanged)
                 setHistoryData(data);
 
                 // Set latest values for the metric cards
@@ -66,6 +65,23 @@ export default function DeviceDetails() {
                     const latest = data[data.length - 1];
                     setTemperature(latest.temperature);
                     setHumidity(latest.humidity);
+                }
+
+                // Seed live chart with readings since login only
+                const loginTime = parseInt(localStorage.getItem('loginTime') || '0');
+                const filtered = loginTime > 0
+                    ? data.filter(r => new Date(r.timestamp).getTime() >= loginTime)
+                    : data;
+                if (filtered.length > 0) {
+                    const slice = filtered.slice(-MAX_CHART_POINTS);
+                    const padLen = MAX_CHART_POINTS - slice.length;
+                    setLiveChartData(prev => ({
+                        labels: [...Array(padLen).fill(''), ...slice.map(r => new Date(r.timestamp).toLocaleTimeString())],
+                        datasets: [
+                            { ...prev.datasets[0], data: [...Array(padLen).fill(null), ...slice.map(r => r.temperature)] },
+                            { ...prev.datasets[1], data: [...Array(padLen).fill(null), ...slice.map(r => r.humidity)] }
+                        ]
+                    }));
                 }
             }
         } catch (e) { console.error(e); }
