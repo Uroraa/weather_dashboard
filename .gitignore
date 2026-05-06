@@ -1,2 +1,11 @@
 .env
 node_modules/
+__pycache__/
+*.pyc
+venv/
+env/
+dist/
+*.log
+.DS_Store
+Thumbs.db
+lstm_model.pth

@@ -7,7 +7,7 @@ const char* ssid = "Long";
 const char* password = "01234567";
 
 // -- Server Details --
-const char* mqtt_server = "192.168.1.8";
+const char* mqtt_server = "192.168.1.5";
 const int mqtt_port = 1883;
 
 // Your device's API Key
