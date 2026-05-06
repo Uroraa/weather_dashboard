@@ -113,20 +113,15 @@ export function ConnectionProvider({ children }) {
         setLiveHumidity('--');
         markDeviceOffline(selectedDevice);
 
-        // Seed chart from DB, filtered to only include readings since login
+        // Seed chart from DB so data is available immediately (covers reload too)
         apiFetch(`/api/devices/${selectedDevice}/readings?limit=${MAX_DATA_POINTS}`)
             .then(r => r.ok ? r.json() : null)
             .then(readings => {
                 if (!readings || readings.length === 0) return;
-                const loginTime = parseInt(localStorage.getItem('loginTime') || '0');
-                const filtered = loginTime > 0
-                    ? readings.filter(r => new Date(r.timestamp).getTime() >= loginTime)
-                    : readings;
-                if (filtered.length === 0) return;
-                const padLen = MAX_DATA_POINTS - filtered.length;
-                const labels = [...Array(padLen).fill(''), ...filtered.map(r => new Date(r.timestamp).toLocaleTimeString())];
-                const temps  = [...Array(padLen).fill(null),  ...filtered.map(r => r.temperature)];
-                const hums   = [...Array(padLen).fill(null),  ...filtered.map(r => r.humidity)];
+                const padLen = MAX_DATA_POINTS - readings.length;
+                const labels = [...Array(padLen).fill(''), ...readings.map(r => new Date(r.timestamp).toLocaleTimeString())];
+                const temps  = [...Array(padLen).fill(null),  ...readings.map(r => r.temperature)];
+                const hums   = [...Array(padLen).fill(null),  ...readings.map(r => r.humidity)];
                 setChartData(prev => ({
                     ...prev,
                     labels,
@@ -135,7 +130,7 @@ export function ConnectionProvider({ children }) {
                         { ...prev.datasets[1], data: hums }
                     ]
                 }));
-                const last = filtered[filtered.length - 1];
+                const last = readings[readings.length - 1];
                 setLiveTemp(Number(last.temperature).toFixed(1));
                 setLiveHumidity(Math.round(Number(last.humidity)).toString());
             })

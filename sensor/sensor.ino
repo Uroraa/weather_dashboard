@@ -3,18 +3,18 @@
 #include "DHT.h"
 
 // -- WiFi Credentials --
-const char* ssid = "Long";
-const char* password = "01234567";
+const char* ssid = "Sxmh1";
+const char* password = "123456789@";
 
 // -- Server Details --
-const char* mqtt_server = "192.168.1.8";
+const char* mqtt_server = "192.168.3.86";
 const int mqtt_port = 1883;
 
 // Your device's API Key
-const char* deviceApiKey = "91bec79d-6815-4b58-a58b-d122526fdd19"; 
+const char* deviceApiKey = "e47c65de-e907-4e86-b6de-7f7266b07943"; 
 
 // The topic to publish to
-const char* mqtt_topic = "device/91bec79d-6815-4b58-a58b-d122526fdd19/data";
+const char* mqtt_topic = "device/e47c65de-e907-4e86-b6de-7f7266b07943/data";
 
 // -- DHT11 Config --
 #define DHTPIN 4        // GPIO 4
