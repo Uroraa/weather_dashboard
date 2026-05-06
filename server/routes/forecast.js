@@ -7,7 +7,8 @@ const { authenticateToken: authMiddleware } = require('../middleware/auth')
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const deviceId = req.query.device_id || null
-    const data     = await getForecast(deviceId)
+    const horizon  = req.query.horizon || '6min'
+    const data     = await getForecast(deviceId, horizon)
     res.json(data)
   } catch (err) {
     res.status(500).json({ error: err.message })

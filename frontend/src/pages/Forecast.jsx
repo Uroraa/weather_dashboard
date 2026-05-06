@@ -82,6 +82,7 @@ export default function Forecast() {
   const { markDeviceOnline, markDeviceOffline, setActiveDeviceId } = useConnection();
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('');
+  const [horizon, setHorizon] = useState('6min');
   const [loading, setLoading] = useState(true);
   const [fetchingForecast, setFetchingForecast] = useState(false);
   const [insufficientData, setInsufficientData] = useState(false);
@@ -160,7 +161,7 @@ export default function Forecast() {
           return;
         }
 
-        return apiFetch(`/api/forecast?device_id=${selectedDevice}`)
+        return apiFetch(`/api/forecast?device_id=${selectedDevice}&horizon=${horizon}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error('Forecast service unavailable')))
           .then(forecastRes => {
             const forecast = forecastRes.forecast || [];
@@ -235,7 +236,7 @@ export default function Forecast() {
       })
       .catch(err => setError(err.message || 'Failed to load forecast'))
       .finally(() => setFetchingForecast(false));
-  }, [selectedDevice]);
+  }, [selectedDevice, horizon]);
 
   if (!isAuthenticated) {
     return (
@@ -259,6 +260,17 @@ export default function Forecast() {
   return (
     <>
       <div style={{ position: 'absolute', top: '90px', right: '35px', zIndex: 10, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <label htmlFor="forecast-horizon-selector" style={{ margin: 0 }}>Horizon:</label>
+        <select
+          id="forecast-horizon-selector"
+          className="device-select"
+          value={horizon}
+          onChange={e => setHorizon(e.target.value)}
+        >
+          <option value="6min">6 min</option>
+          <option value="10min">10 min</option>
+          <option value="15min">15 min</option>
+        </select>
         <label htmlFor="forecast-device-selector" style={{ margin: 0 }}>
           <i className="ph ph-funnel"></i> Device:
         </label>
@@ -303,7 +315,7 @@ export default function Forecast() {
           <div className="card">
             <div className="card-header" style={{ marginBottom: '1rem' }}>
               <i className="ph ph-robot"></i>
-              <span>AI Forecast — Historical vs Predicted</span>
+              <span>AI Forecast — Next {horizon.replace('min', ' min')} Ahead</span>
             </div>
             <div className="chart-container">
               <Line data={chartData} options={chartOptions} plugins={[nowLinePlugin]} />
