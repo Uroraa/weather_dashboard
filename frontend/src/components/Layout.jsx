@@ -1,12 +1,24 @@
 import React, { useState } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useConnection } from '../context/ConnectionContext';
 import AccountDropdown from './AccountDropdown';
+
+const STATUS_CONFIG = {
+    online:  { label: 'Live Connected', dotClass: 'live',    textColor: 'var(--success-color)' },
+    offline: { label: 'Offline',        dotClass: 'offline', textColor: '#fc8181' },
+};
+
+const PAGES_WITH_STATUS = ['/', '/forecast'];
 
 const Layout = () => {
     const { user, isAuthenticated } = useAuth();
+    const { activeStatus } = useConnection();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const location = useLocation();
+
+    const showStatus = PAGES_WITH_STATUS.includes(location.pathname);
+    const { label, dotClass, textColor } = STATUS_CONFIG[activeStatus] || STATUS_CONFIG.offline;
 
     const getPageTitle = () => {
         switch (location.pathname) {
@@ -28,7 +40,7 @@ const Layout = () => {
                     <i className="ph-fill ph-cpu"></i>
                     <span>IoT Monitor</span>
                 </div>
-                
+
                 <nav className="sidebar-nav">
                     <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
                         <i className="ph ph-squares-four"></i>
@@ -46,7 +58,7 @@ const Layout = () => {
                         <i className="ph ph-cloud-sun"></i>
                         <span>Forecast</span>
                     </NavLink>
-                    
+
                     {isAuthenticated && user?.role === 'admin' && (
                         <NavLink to="/admin" className={({ isActive }) => `nav-item admin-nav ${isActive ? 'active' : ''}`} id="admin-nav">
                             <i className="ph ph-shield-check"></i>
@@ -62,13 +74,14 @@ const Layout = () => {
                         <button className="menu-toggle" id="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
                             <i className="ph ph-list"></i>
                         </button>
-                        <div className="status-indicator">
-                            {/* We will leave status updates to individual pages via a context or globally later. For now let's just make it a placeholder or simple prop from Outlet context */}
-                            <span className="status-dot" id="global-status-dot"></span>
-                            <span id="global-status-text">Ready</span>
-                        </div>
+                        {showStatus && (
+                            <div className="status-indicator">
+                                <span className={`status-dot ${dotClass}`}></span>
+                                <span style={{ color: textColor, transition: 'color 0.3s ease' }}>{label}</span>
+                            </div>
+                        )}
                     </div>
-                    
+
                     <div className="topbar-right">
                         <AccountDropdown />
                     </div>
@@ -77,11 +90,8 @@ const Layout = () => {
                 <main className="content">
                     <div className="page-header">
                         <h1 className="page-title">{getPageTitle()}</h1>
-                        
-                        {/* the device selector is only for dashboard usually. We can define an Outlet context to pass it back up, but for identical UI it's easier to put the selector INSIDE the page components so Layout is generic. In index.html the device selector is in the content wrapper. */}
                     </div>
-                    
-                    {/* Render page content */}
+
                     <Outlet />
                 </main>
             </div>
