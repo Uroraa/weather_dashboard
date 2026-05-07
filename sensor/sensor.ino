@@ -15,7 +15,7 @@ const int mqtt_port = 1883;
 const char* deviceApiKey = "DEVICE_API_KEY"; 
 
 // The topic to publish to
-const char* mqtt_topic = "device/" + String(deviceApiKey) + "/data";
+char mqtt_topic[64];
 
 // -- DHT11 Config --
 #define DHTPIN 4        // GPIO 4
@@ -65,11 +65,10 @@ void reconnect() {
 
 void setup() {
   Serial.begin(115200);
-  
   dht.begin();
   
   setup_wifi();
-  
+  snprintf(mqtt_topic, sizeof(mqtt_topic), "device/%s/data", deviceApiKey);
   client.setServer(mqtt_server, mqtt_port);
 }
 

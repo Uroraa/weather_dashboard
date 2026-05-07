@@ -51,10 +51,12 @@ export default function Dashboard() {
             x: { display: false, grid: { display: false } },
             y: {
                 type: 'linear', display: true, position: 'left',
+                suggestedMin: 10, suggestedMax: 45,
                 title: { display: true, text: 'Temperature (°C)', color: '#e53e3e' }
             },
             y1: {
                 type: 'linear', display: true, position: 'right',
+                min: 0, max: 100,
                 title: { display: true, text: 'Humidity (%)', color: '#3182ce' },
                 grid: { drawOnChartArea: false }
             }

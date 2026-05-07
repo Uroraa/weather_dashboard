@@ -162,8 +162,8 @@ export default function DeviceDetails() {
     const chartOptions = {
         responsive: true, maintainAspectRatio: false,
         scales: {
-            y: { type: 'linear', position: 'left' },
-            y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false } }
+            y: { type: 'linear', position: 'left', suggestedMin: 10, suggestedMax: 45 },
+            y1: { type: 'linear', position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false } }
         }
     };
 

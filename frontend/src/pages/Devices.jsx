@@ -23,6 +23,8 @@ export default function Devices() {
     const [editHumHigh, setEditHumHigh] = useState('');
     const [editHumLow, setEditHumLow] = useState('');
     const [editEmailNotify, setEditEmailNotify] = useState(false);
+    const [editX, setEditX] = useState('');
+    const [editY, setEditY] = useState('');
 
     const socketRef = useRef(null);
 
@@ -94,7 +96,9 @@ export default function Devices() {
             temp_low: editTempLow || null,
             hum_high: editHumHigh || null,
             hum_low: editHumLow || null,
-            notify_email: editEmailNotify
+            notify_email: editEmailNotify,
+            x: editX !== '' ? parseFloat(editX) : null,
+            y: editY !== '' ? parseFloat(editY) : null,
         };
 
         try {
@@ -124,6 +128,8 @@ export default function Devices() {
         setEditHumHigh(d.hum_high ?? '');
         setEditHumLow(d.hum_low ?? '');
         setEditEmailNotify(!!d.notify_email);
+        setEditX(d.x ?? '');
+        setEditY(d.y ?? '');
         setIsEditModalOpen(true);
     };
 
@@ -234,6 +240,18 @@ export default function Devices() {
                             <div className="form-group">
                                 <label>Humidity Low (%)</label>
                                 <input type="number" step="1" value={editHumLow} onChange={e => setEditHumLow(e.target.value)} />
+                            </div>
+                        </div>
+
+                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Vị trí không gian (Spatial)</h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                            <div className="form-group">
+                                <label>X (m)</label>
+                                <input type="number" step="0.1" placeholder="e.g. 1.5" value={editX} onChange={e => setEditX(e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>Y (m)</label>
+                                <input type="number" step="0.1" placeholder="e.g. 3.0" value={editY} onChange={e => setEditY(e.target.value)} />
                             </div>
                         </div>
 

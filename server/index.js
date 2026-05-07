@@ -29,8 +29,10 @@ const devicesRoutes = require('./routes/devices');
 const dataRoutes = require('./routes/data');
 const alertsRoutes = require('./routes/alerts');
 const forecastRoutes = require('./routes/forecast')
+const spatialForecastRoutes = require('./routes/spatialForecast')
 
 app.use('/api/forecast', forecastRoutes)
+app.use('/api/spatial-forecast', spatialForecastRoutes)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/devices', devicesRoutes);

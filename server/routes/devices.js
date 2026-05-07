@@ -74,10 +74,10 @@ router.post('/', authenticateToken, async (req, res) => {
 // Update device thresholds & email notify setting
 router.put('/:id', authenticateToken, async (req, res) => {
     try {
-        const { temp_high, temp_low, hum_high, hum_low, notify_email } = req.body;
+        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y } = req.body;
         const deviceRes = await db.query('SELECT owner_user_id FROM devices WHERE id = $1', [req.params.id]);
         const device = deviceRes.rows[0];
-        
+
         if (!device) return res.status(404).json({ error: 'Device not found' });
 
         if (req.user.role !== 'admin' && device.owner_user_id !== req.user.id) {
@@ -85,8 +85,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
         }
 
         await db.query(
-            `UPDATE devices SET temp_high = $1, temp_low = $2, hum_high = $3, hum_low = $4, notify_email = $5 WHERE id = $6`,
-            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, req.params.id]
+            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7 WHERE id=$8`,
+            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, x ?? null, y ?? null, req.params.id]
         );
 
         res.json({ message: 'Device updated successfully' });
