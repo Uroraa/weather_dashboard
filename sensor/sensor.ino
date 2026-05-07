@@ -7,14 +7,15 @@ const char* ssid = "Sxmh1";
 const char* password = "123456789@";
 
 // -- Server Details --
-const char* mqtt_server = "192.168.3.86";
+const char* mqtt_server = "IP_ADDRESS"; 
+
 const int mqtt_port = 1883;
 
 // Your device's API Key
-const char* deviceApiKey = "e47c65de-e907-4e86-b6de-7f7266b07943"; 
+const char* deviceApiKey = "DEVICE_API_KEY"; 
 
 // The topic to publish to
-const char* mqtt_topic = "device/e47c65de-e907-4e86-b6de-7f7266b07943/data";
+const char* mqtt_topic = "device/" + String(deviceApiKey) + "/data";
 
 // -- DHT11 Config --
 #define DHTPIN 4        // GPIO 4

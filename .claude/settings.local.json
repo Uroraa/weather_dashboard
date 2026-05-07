@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(xargs grep *)",
-      "Bash(timeout 8 node -e ' *)",
-      "Bash(netstat -ano)"
-    ]
-  }
-}
