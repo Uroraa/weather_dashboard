@@ -20,9 +20,9 @@ INPUT_SIZE   = 2
 HIDDEN_SIZE  = 64
 NUM_LAYERS   = 2
 
-# Grid nội suy 10×8m, 50×40 điểm
-GRID_X = np.linspace(0, 10, 50)
-GRID_Y = np.linspace(0, 8,  40)
+# Grid nội suy theo lat/lng thực tế của phòng 7×7m
+GRID_LAT = np.linspace(20.9076452751, 20.9077081569, 40)
+GRID_LNG = np.linspace(105.8533152221, 105.8533825361, 50)
 
 DB_CONFIG = {
     "host":     "localhost",
@@ -74,7 +74,7 @@ def fetch_devices() -> pd.DataFrame:
     """Lấy danh sách thiết bị và tọa độ từ DB."""
     conn = get_conn()
     df = pd.read_sql(
-        "SELECT id, name, x, y FROM devices WHERE x IS NOT NULL AND y IS NOT NULL",
+        "SELECT id, name, x, y, lat, lng FROM devices WHERE lat IS NOT NULL AND lng IS NOT NULL",
         conn
     )
     conn.close()
@@ -134,29 +134,31 @@ def lstm_forecast(data: np.ndarray) -> np.ndarray:
 # ============================================================
 def make_virtual_nodes(real_nodes: list[dict]) -> list[dict]:
     """
-    real_nodes: [{"x":1,"y":1,"temp":...,"humi":...}, {"x":9,"y":7,...}]
-    Thêm 2 node ảo ở (1,7) và (9,1) bằng trung bình có trọng số IDW.
+    real_nodes: [{"lat":..,"lng":..,"x":..,"y":..,"temp":...,"humi":...}, ...]
+    Thêm 2 node ảo tại 2 góc còn lại của bounding box lat/lng bằng IDW.
     """
-    def idw_value(target_x, target_y, nodes, power=2):
+    def idw_value(tlat, tlng, nodes, power=2):
         weights, temp_sum, humi_sum = 0, 0, 0
         for n in nodes:
-            d = np.sqrt((target_x - n["x"])**2 + (target_y - n["y"])**2)
-            d = max(d, 1e-6)
+            d = np.sqrt((tlat - n["lat"])**2 + (tlng - n["lng"])**2)
+            d = max(d, 1e-10)
             w = 1 / d**power
             weights  += w
             temp_sum += w * n["temp"]
             humi_sum += w * n["humi"]
         return temp_sum / weights, humi_sum / weights
 
+    lats = [n["lat"] for n in real_nodes]
+    lngs = [n["lng"] for n in real_nodes]
     virtual_coords = [
-        (real_nodes[0]["x"], real_nodes[1]["y"]),   # (1, 7)
-        (real_nodes[1]["x"], real_nodes[0]["y"]),   # (9, 1)
+        (min(lats), max(lngs)),
+        (max(lats), min(lngs)),
     ]
 
     virtual = []
-    for vx, vy in virtual_coords:
-        t, h = idw_value(vx, vy, real_nodes)
-        virtual.append({"x": vx, "y": vy, "temp": t, "humi": h, "virtual": True})
+    for vlat, vlng in virtual_coords:
+        t, h = idw_value(vlat, vlng, real_nodes)
+        virtual.append({"lat": vlat, "lng": vlng, "temp": t, "humi": h, "virtual": True})
 
     return virtual
 
@@ -166,26 +168,26 @@ def make_virtual_nodes(real_nodes: list[dict]) -> list[dict]:
 # ============================================================
 def kriging_grid(nodes: list[dict], field: str) -> np.ndarray:
     """
-    nodes: list dict có x, y, và field (temp hoặc humi)
-    return: grid (len(GRID_Y), len(GRID_X))
+    nodes: list dict có lat, lng, và field (temp hoặc humi)
+    return: grid (len(GRID_LAT), len(GRID_LNG)) = (40, 50)
     """
-    xs = np.array([n["x"] for n in nodes])
-    ys = np.array([n["y"] for n in nodes])
-    zs = np.array([n[field] for n in nodes])
+    lats = np.array([n["lat"] for n in nodes])
+    lngs = np.array([n["lng"] for n in nodes])
+    zs   = np.array([n[field] for n in nodes])
 
     try:
         ok = OrdinaryKriging(
-            xs, ys, zs,
+            lngs, lats, zs,
             variogram_model="gaussian",
             verbose=False,
             enable_plotting=False,
         )
-        z_grid, _ = ok.execute("grid", GRID_X, GRID_Y)
+        z_grid, _ = ok.execute("grid", GRID_LNG, GRID_LAT)
         return np.array(z_grid)  # (40, 50)
     except Exception:
         # Fallback về IDW nếu Kriging lỗi (ít node quá)
-        points = np.column_stack([xs, ys])
-        gx, gy = np.meshgrid(GRID_X, GRID_Y)
+        points = np.column_stack([lngs, lats])
+        gx, gy = np.meshgrid(GRID_LNG, GRID_LAT)
         z_grid = griddata(points, zs, (gx, gy), method="linear")
         return np.nan_to_num(z_grid, nan=float(np.nanmean(zs)))
 
@@ -196,8 +198,10 @@ def kriging_grid(nodes: list[dict], field: str) -> np.ndarray:
 class NodeForecast(BaseModel):
     device_id: Optional[int]
     name:      str
-    x:         float
-    y:         float
+    x:         Optional[float]
+    y:         Optional[float]
+    lat:       float
+    lng:       float
     virtual:   bool
     forecast:  list[dict]   # list {timestamp, temperature, humidity}
 
@@ -207,8 +211,8 @@ class HeatmapSlice(BaseModel):
     humidity:       list
 
 class SpatialForecastResponse(BaseModel):
-    grid_x:   list[float]
-    grid_y:   list[float]
+    grid_lat: list[float]
+    grid_lng: list[float]
     nodes:    list[NodeForecast]
     heatmaps: list[HeatmapSlice]
 
@@ -236,8 +240,10 @@ def spatial_forecast():
             per_device.append({
                 "device_id": device_id,
                 "name":      str(row["name"]),
-                "x":         float(row["x"]),
-                "y":         float(row["y"]),
+                "x":         float(row["x"]) if row["x"] is not None else None,
+                "y":         float(row["y"]) if row["y"] is not None else None,
+                "lat":       float(row["lat"]),
+                "lng":       float(row["lng"]),
                 "current":   current,
                 "pred":      pred,
             })
@@ -251,7 +257,7 @@ def spatial_forecast():
     # --- Bước 2: Build NodeForecast list ---
     # Representative values for virtual node IDW: use step +1 (nearest prediction)
     real_nodes_repr = [
-        {"x": d["x"], "y": d["y"], "temp": float(d["pred"][0, 0]), "humi": float(d["pred"][0, 1])}
+        {"lat": d["lat"], "lng": d["lng"], "temp": float(d["pred"][0, 0]), "humi": float(d["pred"][0, 1])}
         for d in per_device
     ]
     virtual_nodes = make_virtual_nodes(real_nodes_repr)
@@ -272,6 +278,8 @@ def spatial_forecast():
             name=d["name"],
             x=d["x"],
             y=d["y"],
+            lat=d["lat"],
+            lng=d["lng"],
             virtual=False,
             forecast=fc_list,
         ))
@@ -279,9 +287,11 @@ def spatial_forecast():
     for vn in virtual_nodes:
         node_forecasts.append(NodeForecast(
             device_id=None,
-            name=f"Virtual ({vn['x']}, {vn['y']})",
-            x=vn["x"],
-            y=vn["y"],
+            name=f"Virtual ({round(vn['lat'], 7)}, {round(vn['lng'], 7)})",
+            x=None,
+            y=None,
+            lat=vn["lat"],
+            lng=vn["lng"],
             virtual=True,
             forecast=[],
         ))
@@ -294,7 +304,7 @@ def spatial_forecast():
     print(f"[Spatial] current readings available: {len(current_nodes)}/{len(per_device)} devices")
     if len(current_nodes) >= 2:
         nodes_curr = [
-            {"x": d["x"], "y": d["y"], "temp": d["current"]["temp"], "humi": d["current"]["humi"]}
+            {"lat": d["lat"], "lng": d["lng"], "temp": d["current"]["temp"], "humi": d["current"]["humi"]}
             for d in current_nodes
         ]
         virtual_curr = make_virtual_nodes(nodes_curr)
@@ -313,7 +323,7 @@ def spatial_forecast():
     # horizon_minute=1..HORIZON: LSTM predictions → sync với single-device forecast
     for h in range(HORIZON):
         nodes_h = [
-            {"x": d["x"], "y": d["y"], "temp": float(d["pred"][h, 0]), "humi": float(d["pred"][h, 1])}
+            {"lat": d["lat"], "lng": d["lng"], "temp": float(d["pred"][h, 0]), "humi": float(d["pred"][h, 1])}
             for d in per_device
         ]
         virtual_h   = make_virtual_nodes(nodes_h)
@@ -327,8 +337,8 @@ def spatial_forecast():
         ))
 
     return SpatialForecastResponse(
-        grid_x=GRID_X.tolist(),
-        grid_y=GRID_Y.tolist(),
+        grid_lat=GRID_LAT.tolist(),
+        grid_lng=GRID_LNG.tolist(),
         nodes=node_forecasts,
         heatmaps=heatmaps,
     )

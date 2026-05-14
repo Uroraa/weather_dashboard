@@ -12,10 +12,12 @@ export default function Devices() {
     // Modals state
     const [isAddModalOpen, setIsAddModalOpen] = useState(false);
     const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-    
+
     // Form states
     const [newDevName, setNewDevName] = useState('');
     const [newDevDesc, setNewDevDesc] = useState('');
+    const [pendingDevices, setPendingDevices] = useState([]);
+    const [selectedMac, setSelectedMac] = useState('');
     
     const [editDevId, setEditDevId] = useState('');
     const [editTempHigh, setEditTempHigh] = useState('');
@@ -25,6 +27,14 @@ export default function Devices() {
     const [editEmailNotify, setEditEmailNotify] = useState(false);
     const [editX, setEditX] = useState('');
     const [editY, setEditY] = useState('');
+    const [editLat, setEditLat] = useState('');
+    const [editLng, setEditLng] = useState('');
+
+    const ROOM_BOUNDS = {
+        minLat: 20.9076452751, maxLat: 20.9077081569,
+        minLng: 105.8533152221, maxLng: 105.8533825361,
+        size: 7 // 7 meters
+    };
 
     const socketRef = useRef(null);
 
@@ -72,17 +82,37 @@ export default function Devices() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [isAuthenticated, token]);
 
+    const openAddModal = async () => {
+        setIsAddModalOpen(true);
+        await refreshPending();
+    };
+
+    const refreshPending = async () => {
+        try {
+            const res = await apiFetch('/api/devices/pending');
+            if (res.ok) setPendingDevices(await res.json());
+        } catch (_) {}
+    };
+
+    const closeAddModal = () => {
+        setIsAddModalOpen(false);
+        setNewDevName('');
+        setNewDevDesc('');
+        setSelectedMac('');
+        setPendingDevices([]);
+    };
+
     const handleAddDevice = async (e) => {
         e.preventDefault();
         try {
+            const body = { name: newDevName, description: newDevDesc };
+            if (selectedMac) body.mac_address = selectedMac;
             const res = await apiFetch('/api/devices', {
                 method: 'POST',
-                body: JSON.stringify({ name: newDevName, description: newDevDesc })
+                body: JSON.stringify(body)
             });
-            if(!res.ok) throw new Error("Failed to add device");
-            setIsAddModalOpen(false);
-            setNewDevName('');
-            setNewDevDesc('');
+            if (!res.ok) throw new Error("Failed to add device");
+            closeAddModal();
             loadMyDevices();
         } catch(err) {
             alert(err.message);
@@ -104,7 +134,11 @@ export default function Devices() {
         try {
             const res = await apiFetch(`/api/devices/${editDevId}`, {
                 method: 'PUT',
-                body: JSON.stringify(payload)
+                body: JSON.stringify({
+                    ...payload,
+                    lat: editLat !== '' ? parseFloat(editLat) : null,
+                    lng: editLng !== '' ? parseFloat(editLng) : null,
+                })
             });
             if(!res.ok) throw new Error("Update failed");
             setIsEditModalOpen(false);
@@ -130,7 +164,41 @@ export default function Devices() {
         setEditEmailNotify(!!d.notify_email);
         setEditX(d.x ?? '');
         setEditY(d.y ?? '');
+        setEditLat(d.lat ?? '');
+        setEditLng(d.lng ?? '');
         setIsEditModalOpen(true);
+    };
+
+    const handleXChange = (val) => {
+        setEditX(val);
+        if (val === '') { setEditLng(''); return; }
+        const x = parseFloat(val);
+        const lng = ROOM_BOUNDS.minLng + (x / ROOM_BOUNDS.size) * (ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng);
+        setEditLng(lng.toFixed(10));
+    };
+
+    const handleYChange = (val) => {
+        setEditY(val);
+        if (val === '') { setEditLat(''); return; }
+        const y = parseFloat(val);
+        const lat = ROOM_BOUNDS.minLat + (y / ROOM_BOUNDS.size) * (ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat);
+        setEditLat(lat.toFixed(10));
+    };
+
+    const handleLatChange = (val) => {
+        setEditLat(val);
+        if (val === '') { setEditY(''); return; }
+        const lat = parseFloat(val);
+        const y = ((lat - ROOM_BOUNDS.minLat) / (ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat)) * ROOM_BOUNDS.size;
+        setEditY(y.toFixed(2));
+    };
+
+    const handleLngChange = (val) => {
+        setEditLng(val);
+        if (val === '') { setEditX(''); return; }
+        const lng = parseFloat(val);
+        const x = ((lng - ROOM_BOUNDS.minLng) / (ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng)) * ROOM_BOUNDS.size;
+        setEditX(x.toFixed(2));
     };
 
     const copyKey = (key) => {
@@ -142,7 +210,7 @@ export default function Devices() {
         <>
             <div style={{ position: 'absolute', top: '15px', right: '120px', zIndex: 100 }}>
                 {isAuthenticated && (
-                    <button className="btn btn-primary" onClick={() => setIsAddModalOpen(true)}>
+                    <button className="btn btn-primary" onClick={openAddModal}>
                         <i className="ph ph-plus"></i> Add Device
                     </button>
                 )}
@@ -196,9 +264,46 @@ export default function Devices() {
                 <div className="modal-content">
                     <div className="modal-header">
                         <h3>Add New Device</h3>
-                        <button className="close-btn" onClick={() => setIsAddModalOpen(false)}><i className="ph ph-x"></i></button>
+                        <button className="close-btn" onClick={closeAddModal}><i className="ph ph-x"></i></button>
                     </div>
                     <form onSubmit={handleAddDevice}>
+                        <div className="form-group">
+                            <label style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                <span>Detected Devices <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(waiting for registration)</span></span>
+                                <button type="button" onClick={refreshPending} style={{ background: 'none', border: '1px solid #cbd5e0', borderRadius: '0.375rem', padding: '0.15rem 0.5rem', fontSize: '0.75rem', cursor: 'pointer', color: 'var(--text-muted)' }}>↻ Refresh</button>
+                            </label>
+                            {pendingDevices.length === 0 ? (
+                                <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>No devices detected yet. Make sure the ESP32 is powered on, then click Refresh.</p>
+                            ) : (
+                                <>
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.5rem' }}>
+                                        {pendingDevices.map(p => (
+                                            <div
+                                                key={p.mac_address}
+                                                onClick={() => setSelectedMac(selectedMac === p.mac_address ? '' : p.mac_address)}
+                                                style={{
+                                                    display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                                    padding: '0.5rem 0.75rem', borderRadius: '0.5rem', cursor: 'pointer',
+                                                    border: `2px solid ${selectedMac === p.mac_address ? 'var(--primary-color)' : '#e2e8f0'}`,
+                                                    background: selectedMac === p.mac_address ? '#ebf8ff' : '#f7fafc',
+                                                }}
+                                            >
+                                                <i className="ph ph-cpu" style={{ fontSize: '1.25rem', color: selectedMac === p.mac_address ? 'var(--primary-color)' : '#718096' }}></i>
+                                                <div style={{ flex: 1 }}>
+                                                    <div style={{ fontFamily: 'monospace', fontSize: '0.875rem', fontWeight: 600 }}>{p.mac_address}</div>
+                                                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{p.chip_model || 'ESP32'}{p.firmware_version ? ` · v${p.firmware_version}` : ''}</div>
+                                                </div>
+                                                {selectedMac === p.mac_address && <i className="ph ph-check-circle" style={{ color: 'var(--primary-color)', fontSize: '1.1rem' }}></i>}
+                                            </div>
+                                        ))}
+                                    </div>
+                                    {selectedMac
+                                        ? <p style={{ fontSize: '0.75rem', color: '#38a169', marginTop: '0.5rem' }}><i className="ph ph-check"></i> Selected — device will configure automatically after creation.</p>
+                                        : <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>Select a device above to configure it automatically, or leave unselected.</p>
+                                    }
+                                </>
+                            )}
+                        </div>
                         <div className="form-group">
                             <label>Device Name</label>
                             <input type="text" required placeholder="e.g. Living Room Sensor" value={newDevName} onChange={e => setNewDevName(e.target.value)} />
@@ -208,7 +313,7 @@ export default function Devices() {
                             <textarea rows="3" value={newDevDesc} onChange={e => setNewDevDesc(e.target.value)}></textarea>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '1rem', marginTop: '1.5rem' }}>
-                            <button type="button" className="btn btn-outline" onClick={() => setIsAddModalOpen(false)}>Cancel</button>
+                            <button type="button" className="btn btn-outline" onClick={closeAddModal}>Cancel</button>
                             <button type="submit" className="btn btn-primary">Create Device</button>
                         </div>
                     </form>
@@ -243,15 +348,27 @@ export default function Devices() {
                             </div>
                         </div>
 
-                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Vị trí không gian (Spatial)</h4>
+                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Position (x / y) — 0 to 7 m</h4>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
                             <div className="form-group">
                                 <label>X (m)</label>
-                                <input type="number" step="0.1" placeholder="e.g. 1.5" value={editX} onChange={e => setEditX(e.target.value)} />
+                                <input type="number" min="0" max="7" step="0.01" placeholder="e.g. 1.5" value={editX} onChange={e => handleXChange(e.target.value)} />
                             </div>
                             <div className="form-group">
                                 <label>Y (m)</label>
-                                <input type="number" step="0.1" placeholder="e.g. 3.0" value={editY} onChange={e => setEditY(e.target.value)} />
+                                <input type="number" min="0" max="7" step="0.01" placeholder="e.g. 3.0" value={editY} onChange={e => handleYChange(e.target.value)} />
+                            </div>
+                        </div>
+
+                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Geographic Coordinates (Lat/Lng)</h4>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                            <div className="form-group">
+                                <label>Latitude</label>
+                                <input type="number" step="0.0000000001" placeholder="e.g. 20.9076..." value={editLat} onChange={e => handleLatChange(e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>Longitude</label>
+                                <input type="number" step="0.0000000001" placeholder="e.g. 105.8533..." value={editLng} onChange={e => handleLngChange(e.target.value)} />
                             </div>
                         </div>
 

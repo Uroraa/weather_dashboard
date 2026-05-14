@@ -3,6 +3,13 @@ const router = express.Router();
 const db = require('../models/db');
 const { v4: uuidv4 } = require('uuid');
 const { authenticateToken, optionalAuthenticateToken } = require('../middleware/auth');
+const { publishDeviceConfig, getPendingDevices, addPendingDevice, removePendingDevice } = require('../services/mqttService');
+const { xyToLatLng, latLngToXY } = require('../utils/geoUtils');
+
+// List devices detected via MQTT but not yet registered
+router.get('/pending', authenticateToken, async (req, res) => {
+    res.json(getPendingDevices());
+});
 
 // Get all devices (Public read allowed for v1 dashboard)
 router.get('/', optionalAuthenticateToken, async (req, res) => {
@@ -54,15 +61,30 @@ router.get('/:id', optionalAuthenticateToken, async (req, res) => {
 // Create a new device
 router.post('/', authenticateToken, async (req, res) => {
     try {
-        const { name, description } = req.body;
+        const { name, description, mac_address } = req.body;
         if (!name) return res.status(400).json({ error: 'Device name is required' });
 
         const apiKey = uuidv4();
-        await db.query(
-            `INSERT INTO devices (name, description, owner_user_id, api_key) 
-             VALUES ($1, $2, $3, $4)`,
-            [name, description || '', req.user.id, apiKey]
-        );
+
+        if (mac_address) {
+            const existing = await db.query('SELECT id FROM devices WHERE mac_address = $1', [mac_address]);
+            if (existing.rows.length > 0) {
+                return res.status(409).json({ error: 'A device with this MAC address is already registered' });
+            }
+            const result = await db.query(
+                `INSERT INTO devices (name, description, owner_user_id, api_key, mac_address)
+                 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+                [name, description || '', req.user.id, apiKey, mac_address]
+            );
+            publishDeviceConfig(mac_address, result.rows[0].id, apiKey);
+            removePendingDevice(mac_address);
+        } else {
+            await db.query(
+                `INSERT INTO devices (name, description, owner_user_id, api_key)
+                 VALUES ($1, $2, $3, $4)`,
+                [name, description || '', req.user.id, apiKey]
+            );
+        }
 
         res.status(201).json({ message: 'Device created successfully', api_key: apiKey });
     } catch (err) {
@@ -74,8 +96,8 @@ router.post('/', authenticateToken, async (req, res) => {
 // Update device thresholds & email notify setting
 router.put('/:id', authenticateToken, async (req, res) => {
     try {
-        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y } = req.body;
-        const deviceRes = await db.query('SELECT owner_user_id FROM devices WHERE id = $1', [req.params.id]);
+        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y, lat, lng } = req.body;
+        const deviceRes = await db.query('SELECT owner_user_id, x, y, lat, lng FROM devices WHERE id = $1', [req.params.id]);
         const device = deviceRes.rows[0];
 
         if (!device) return res.status(404).json({ error: 'Device not found' });
@@ -84,9 +106,21 @@ router.put('/:id', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Access denied' });
         }
 
+        let finalX = device.x, finalY = device.y, finalLat = device.lat, finalLng = device.lng;
+
+        if (x != null && y != null) {
+            finalX = x; finalY = y;
+            const geo = xyToLatLng(x, y);
+            finalLat = geo.lat; finalLng = geo.lng;
+        } else if (lat != null && lng != null) {
+            finalLat = lat; finalLng = lng;
+            const xy = latLngToXY(lat, lng);
+            finalX = xy.x; finalY = xy.y;
+        }
+
         await db.query(
-            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7 WHERE id=$8`,
-            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, x ?? null, y ?? null, req.params.id]
+            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7, lat=$8, lng=$9 WHERE id=$10`,
+            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, finalX, finalY, finalLat, finalLng, req.params.id]
         );
 
         res.json({ message: 'Device updated successfully' });
@@ -168,6 +202,40 @@ router.get('/:id/summary', optionalAuthenticateToken, async (req, res) => {
         res.json({ latest: latestRes.rows[0], stats: statsRes.rows[0] });
     } catch (err) {
         console.error(err);
+        res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// POST /api/devices/provision — no auth, HTTP fallback for ESP32
+router.post('/provision', async (req, res) => {
+    try {
+        const { mac_address, firmware_version, chip_model } = req.body;
+
+        if (!mac_address) {
+            return res.status(400).json({ error: 'mac_address is required' });
+        }
+
+        const existing = await db.query(
+            'SELECT id, name, api_key FROM devices WHERE mac_address = $1',
+            [mac_address]
+        );
+
+        if (existing.rows.length > 0) {
+            const device = existing.rows[0];
+            return res.json({
+                status:    'existing',
+                device_id: device.id,
+                api_key:   device.api_key,
+                name:      device.name,
+            });
+        }
+
+        // New device — add to pending, wait for user to register via UI
+        addPendingDevice(mac_address, firmware_version, chip_model);
+        res.status(202).json({ status: 'pending', message: 'Device queued — waiting for user registration in the dashboard' });
+
+    } catch (err) {
+        console.error('[Provision]', err);
         res.status(500).json({ error: 'Internal server error' });
     }
 });

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useConnection } from '../context/ConnectionContext';
 import { io } from 'socket.io-client';
@@ -6,6 +6,16 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
+import { MapContainer, TileLayer, Rectangle, SVGOverlay, Marker, Popup, useMapEvents } from 'react-leaflet';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: new URL('leaflet/dist/images/marker-icon-2x.png', import.meta.url).href,
+  iconUrl: new URL('leaflet/dist/images/marker-icon.png', import.meta.url).href,
+  shadowUrl: new URL('leaflet/dist/images/marker-shadow.png', import.meta.url).href,
+});
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -100,7 +110,44 @@ const chartOptions = {
   animation: { duration: 400, easing: 'easeOutQuart' }
 };
 
+// MapHoverHandler: writes tile values directly to a DOM ref — zero React state, zero re-renders.
+// Completely decoupled from marker drag; drag only touches pendingPositions on dragend.
+function MapHoverHandler({ grid, W, H, bounds, spatialMode, tooltipRef }) {
+  const [[minLat, minLng], [maxLat, maxLng]] = bounds;
+  useMapEvents({
+    mousemove(e) {
+      const el = tooltipRef?.current;
+      if (!el) return;
+      const { lat, lng } = e.latlng;
+      if (lat < minLat || lat > maxLat || lng < minLng || lng > maxLng) {
+        el.style.display = 'none';
+        return;
+      }
+      const relX = (lng - minLng) / (maxLng - minLng);
+      const relY = (maxLat - lat) / (maxLat - minLat);
+      const col = Math.min(W - 1, Math.max(0, Math.floor(relX * W)));
+      const row = Math.min(H - 1, Math.max(0, Math.floor(relY * H)));
+      const val = grid[row][col];
+      el.style.left = (e.containerPoint.x + 14) + 'px';
+      el.style.top  = (e.containerPoint.y + 14) + 'px';
+      if (spatialMode === 'temperature') {
+        el.style.color = '#fc8181';
+        el.textContent = '\uD83C\uDF21\uFE0F ' + val.toFixed(1) + '\u00b0C';
+      } else {
+        el.style.color = '#63b3ed';
+        el.textContent = '\uD83D\uDCA7 ' + val.toFixed(1) + '%';
+      }
+      el.style.display = 'block';
+    },
+    mouseout() {
+      if (tooltipRef?.current) tooltipRef.current.style.display = 'none';
+    },
+  });
+  return null;
+}
+
 export default function Forecast() {
+
   const { isAuthenticated, apiFetch } = useAuth();
   const { markDeviceOnline, markDeviceOffline, setActiveDeviceId } = useConnection();
 
@@ -126,12 +173,22 @@ export default function Forecast() {
   const [spatialLoading, setSpatialLoading] = useState(false);
   const [spatialError, setSpatialError] = useState(null);
   const [spatialMode, setSpatialMode] = useState('temperature');
-  const [spatialHorizonStep, setSpatialHorizonStep] = useState(0); // 0–3, maps to spatialHorizons
+  const [spatialHorizonStep, setSpatialHorizonStep] = useState(0);
   const [spatialRefreshKey, setSpatialRefreshKey] = useState(0);
   const hasSpatialDataRef = useRef(false);
   const [isSpatialRefreshing, setIsSpatialRefreshing] = useState(false);
-  const canvasRef = useRef(null);
-  const [hoverInfo, setHoverInfo] = useState(null);
+  const [pendingPositions, setPendingPositions] = useState({});
+  const [isAnimating, setIsAnimating] = useState(false);
+  const animIntervalRef = useRef(null);
+  const tileTooltipRef = useRef(null);         // DOM ref for tile value — zero React state
+  const deviceTooltipRef = useRef(null);       // DOM ref for device info — zero React state
+  const [dataFlash, setDataFlash] = useState(false);
+  const [toast, setToast] = useState(null);    // { message, id }
+
+  const ROOM_BOUNDS = {
+    minLat: 20.9076452751, maxLat: 20.9077081569,
+    minLng: 105.8533152221, maxLng: 105.8533825361
+  };
 
   // Derive available horizon steps from heatmap data — synced with FORECAST_HORIZONS, no hard-coded indices
   // "Now" is horizon_minute=0 (actual readings); forecast steps use findIndex on horizon_minute
@@ -280,64 +337,69 @@ export default function Forecast() {
       setIsSpatialRefreshing(true);
     }
     setSpatialError(null);
-    apiFetch('/api/spatial-forecast')
+    apiFetch('/api/forecast/spatial')
       .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.error || 'Failed to load spatial forecast'))))
       .then(data => { setSpatialData(data); hasSpatialDataRef.current = true; })
       .catch(err => { if (!hasSpatialDataRef.current) setSpatialError(err.message || 'Spatial forecast service unavailable'); })
       .finally(() => { setSpatialLoading(false); setIsSpatialRefreshing(false); });
   }, [activeTab, isAuthenticated, spatialRefreshKey]);
 
-  // Draw canvas heatmap
+  // Timelapse animation
   useEffect(() => {
-    if (!spatialData || !canvasRef.current || activeTab !== 'spatial') return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width;
-    const H = canvas.height;
-    const slice = spatialData.heatmaps[sliceIdx];
-    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
-    const toRgb = spatialMode === 'temperature' ? tempToRgb : humToRgb;
+    if (!isAnimating) { clearInterval(animIntervalRef.current); return; }
+    animIntervalRef.current = setInterval(() => {
+      setSpatialHorizonStep(s => (s + 1) % (spatialHorizons.length || 1));
+    }, 800);
+    return () => clearInterval(animIntervalRef.current);
+  }, [isAnimating, spatialHorizons.length]);
 
-    const imgData = ctx.createImageData(W, H);
-    for (let py = 0; py < H; py++) {
-      for (let px = 0; px < W; px++) {
-        const col = Math.min(Math.floor((px / W) * grid[0].length), grid[0].length - 1);
-        const row = Math.min(Math.floor((py / H) * grid.length), grid.length - 1);
-        const [r, g, b] = toRgb(grid[row][col]);
-        const i = (py * W + px) * 4;
-        imgData.data[i] = r; imgData.data[i + 1] = g; imgData.data[i + 2] = b; imgData.data[i + 3] = 255;
-      }
-    }
-    ctx.putImageData(imgData, 0, 0);
+  const showToast = useCallback((message) => {
+    const id = Date.now();
+    setToast({ message, id });
+    setTimeout(() => setToast(prev => prev?.id === id ? null : prev), 3000);
+  }, []);
 
-    spatialData.nodes.filter(n => !n.virtual).forEach(node => {
-      const px = (node.x / 10) * W;
-      const py = (node.y / 8) * H;
-      ctx.beginPath();
-      ctx.arc(px, py, 7, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.9)';
-      ctx.fill();
-      ctx.strokeStyle = '#1a202c';
-      ctx.lineWidth = 2;
-      ctx.stroke();
-      ctx.fillStyle = '#1a202c';
-      ctx.font = 'bold 11px Inter, sans-serif';
-      ctx.fillText(node.name, px + 10, py + 4);
-    });
-  }, [spatialData, sliceIdx, spatialMode, activeTab]);
+  // Flash the map border green whenever spatial data refreshes (skip very first load)
+  useEffect(() => {
+    if (!hasSpatialDataRef.current) return;
+    setDataFlash(true);
+    const t = setTimeout(() => setDataFlash(false), 900);
+    return () => clearTimeout(t);
+  }, [spatialRefreshKey]);
 
-  const handleCanvasMouseMove = (e) => {
-    if (!spatialData) return;
-    const canvas = canvasRef.current;
-    const rect = canvas.getBoundingClientRect();
-    const cssX = e.clientX - rect.left;
-    const cssY = e.clientY - rect.top;
-    const slice = spatialData.heatmaps[sliceIdx];
-    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
-    const col = Math.min(Math.floor((cssX / rect.width) * grid[0].length), grid[0].length - 1);
-    const row = Math.min(Math.floor((cssY / rect.height) * grid.length), grid.length - 1);
-    setHoverInfo({ cssX, cssY, value: grid[row][col], rectWidth: rect.width });
+  const saveNodePosition = async (deviceId) => {
+    const pos = pendingPositions[deviceId];
+    if (!pos) return;
+    await apiFetch(`/api/devices/${deviceId}`, { method: 'PUT', body: JSON.stringify(pos) });
+    setPendingPositions(prev => { const n = { ...prev }; delete n[deviceId]; return n; });
+    setSpatialRefreshKey(k => k + 1);
+    showToast('New location saved');
   };
+
+  // Build a custom DivIcon with the device name label
+  const makeDeviceIcon = (name) => L.divIcon({
+    className: '',
+    html: `
+      <div style="position:relative;display:flex;flex-direction:column;align-items:center;">
+        <div style="width:25px;height:41px;background:url('https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png') center/contain no-repeat;filter:hue-rotate(200deg) saturate(1.5);"></div>
+        <div style="
+          margin-top:2px;
+          background:rgba(26,32,44,0.82);
+          color:#fff;
+          font-size:10px;
+          font-family:'Inter',sans-serif;
+          font-weight:600;
+          padding:2px 6px;
+          border-radius:4px;
+          white-space:nowrap;
+          pointer-events:none;
+          box-shadow:0 1px 4px rgba(0,0,0,0.35);
+        ">${name}</div>
+      </div>`,
+    iconSize: [25, 60],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+  });
 
   if (!isAuthenticated) {
     return (
@@ -478,7 +540,7 @@ export default function Forecast() {
                   </button>
                 </div>
 
-                {/* Horizon slider — 4 discrete steps with tick labels */}
+                {/* Horizon slider */}
                 <div style={{ flex: 1, minWidth: '180px' }}>
                   <input
                     type="range"
@@ -486,7 +548,7 @@ export default function Forecast() {
                     max={spatialHorizons.length - 1}
                     step={1}
                     value={spatialHorizonStep}
-                    onChange={e => { setSpatialHorizonStep(Number(e.target.value)); setHoverInfo(null); }}
+                    onChange={e => setSpatialHorizonStep(Number(e.target.value))}
                     style={{ width: '100%' }}
                   />
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
@@ -497,82 +559,253 @@ export default function Forecast() {
                     ))}
                   </div>
                 </div>
+
+                {/* Animate + Refresh */}
+                <div style={{ display: 'flex', gap: '0.5rem' }}>
+                  <button
+                    className={`btn btn-sm ${isAnimating ? 'btn-primary' : 'btn-outline'}`}
+                    onClick={() => setIsAnimating(a => !a)}
+                    title="Timelapse through horizons"
+                  >
+                    <i className={`ph ${isAnimating ? 'ph-pause' : 'ph-play'}`}></i>
+                  </button>
+                  <button
+                    className="btn btn-sm btn-outline"
+                    onClick={() => { setIsAnimating(false); setSpatialRefreshKey(k => k + 1); }}
+                    title="Refresh"
+                  >
+                    <i className={`ph ph-arrows-clockwise${isSpatialRefreshing ? ' spinning' : ''}`}></i>
+                  </button>
+                </div>
               </div>
 
-              {/* Canvas heatmap — pulse border class during background refresh */}
-              <div
-                style={{ position: 'relative' }}
-                className={isSpatialRefreshing ? 'spatial-canvas-refreshing' : ''}
-              >
-                <canvas
-                  ref={canvasRef}
-                  width={500}
-                  height={400}
-                  style={{ width: '100%', height: 'auto', borderRadius: '0.5rem', display: 'block', cursor: 'crosshair' }}
-                  onMouseMove={handleCanvasMouseMove}
-                  onMouseLeave={() => setHoverInfo(null)}
-                />
-                {hoverInfo && (
-                  <div style={{
-                    position: 'absolute',
-                    left: hoverInfo.cssX + (hoverInfo.cssX > hoverInfo.rectWidth * 0.75 ? -80 : 12),
-                    top: Math.max(4, hoverInfo.cssY - 10),
-                    background: 'rgba(26,32,44,0.88)',
-                    color: '#fff',
-                    padding: '3px 9px',
-                    borderRadius: '6px',
-                    fontSize: '0.8rem',
-                    fontFamily: 'Inter, sans-serif',
-                    fontWeight: 600,
-                    pointerEvents: 'none',
-                    whiteSpace: 'nowrap',
-                    zIndex: 10,
-                  }}>
-                    {spatialMode === 'temperature'
-                      ? `${hoverInfo.value.toFixed(1)} °C`
-                      : `${hoverInfo.value.toFixed(1)} %`}
-                  </div>
-                )}
-              </div>
+              {/* Leaflet map with heatmap overlay */}
+              {/* Outer wrapper: position:relative anchor for tooltips, no overflow clip */}
+              <div style={{
+                position: 'relative',
+                borderRadius: '0.5rem',
+                outline: dataFlash ? '2px solid #38a169' : '2px solid transparent',
+                boxShadow: dataFlash ? '0 0 0 5px rgba(56,161,105,0.22)' : '0 0 0 0px rgba(56,161,105,0)',
+                transition: 'outline 0.25s ease, box-shadow 0.25s ease',
+              }}>
+                {/* Inner wrapper: clips map to rounded corners only */}
+                <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
+                  <MapContainer
+                  center={[20.907676716039095, 105.85334887910626]}
+                  zoom={22}
+                  style={{ height: 420, width: '100%' }}
+                  scrollWheelZoom={true}
+                >
+                  <TileLayer
+                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    maxZoom={25}
+                    maxNativeZoom={19}
+                  />
+
+                  {/* Room boundary rectangle */}
+                  <Rectangle
+                    bounds={[[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]]}
+                    pathOptions={{ color: '#1a202c', weight: 2, fillOpacity: 0 }}
+                  />
+
+                  {/* X/Y Axes Labels */}
+                  {[0, 1, 2, 3, 4, 5, 6, 7].map(m => (
+                    <React.Fragment key={m}>
+                      {/* X Axis (bottom) */}
+                      <Marker
+                        position={[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng + (m/7)*(ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng)]}
+                        interactive={false}
+                        icon={L.divIcon({
+                          className: 'axis-label-x',
+                          html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap;">${m}m</div>`,
+                          iconSize: [20, 10],
+                          iconAnchor: [10, -5]
+                        })}
+                      />
+                      {/* Y Axis (left) */}
+                      <Marker
+                        position={[ROOM_BOUNDS.minLat + (m/7)*(ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat), ROOM_BOUNDS.minLng]}
+                        interactive={false}
+                        icon={L.divIcon({
+                          className: 'axis-label-y',
+                          html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap; text-align: right; width: 25px;">${m}m</div>`,
+                          iconSize: [25, 10],
+                          iconAnchor: [30, 5]
+                        })}
+                      />
+                    </React.Fragment>
+                  ))}
+
+                  {/* Heatmap SVG overlay */}
+                  {spatialData && (() => {
+                    const slice = spatialData.heatmaps[sliceIdx];
+                    if (!slice) return null;
+                    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
+                    const toRgb = spatialMode === 'temperature' ? tempToRgb : humToRgb;
+                    const H = grid.length, W = grid[0].length;
+                    return (
+                      <SVGOverlay
+                        bounds={[[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]]}
+                        attributes={{ opacity: 0.65 }}
+                      >
+                        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height="100%">
+                          {grid.flatMap((row, r) =>
+                            row.map((val, c) => {
+                              const [rv, g, b] = toRgb(val);
+                              return <rect key={`${r}-${c}`} x={c} y={r} width={1} height={1} fill={`rgb(${rv},${g},${b})`} />;
+                            })
+                          )}
+                        </svg>
+                      </SVGOverlay>
+                    );
+                  })()}
+
+                  {/* Device markers — draggable, with name label + hover tooltip */}
+                  {spatialData?.nodes.filter(n => !n.virtual && n.lat && n.lng).map(node => {
+                    // Get current reading values for hover tooltip (use now-slice or first forecast)
+                    const nowSlice = spatialData.heatmaps.find(hm => hm.horizon_minute === 0);
+                    const nodeTemp = node.current_temperature ?? node.forecast?.[0]?.temperature ?? '—';
+                    const nodeHum  = node.current_humidity  ?? node.forecast?.[0]?.humidity  ?? '—';
+                    return (
+                      <Marker
+                        key={node.device_id}
+                        position={[
+                          pendingPositions[node.device_id]?.lat ?? node.lat,
+                          pendingPositions[node.device_id]?.lng ?? node.lng,
+                        ]}
+                        draggable={true}
+                        icon={makeDeviceIcon(node.name)}
+                        eventHandlers={{
+                          dragend(e) {
+                            // Only state change during the whole drag lifecycle
+                            const { lat, lng } = e.target.getLatLng();
+                            setPendingPositions(prev => ({ ...prev, [node.device_id]: { lat, lng } }));
+                          },
+                          mouseover(e) {
+                            const el = deviceTooltipRef.current;
+                            if (!el) return;
+                            const cp = e.containerPoint;
+                            el.style.left = (cp.x + 14) + 'px';
+                            el.style.top  = (cp.y - 80) + 'px';
+                            el.innerHTML = `
+                              <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${node.name}</div>
+                              <div>🌡️ <span style="color:#c53030">${nodeTemp !== '\u2014' ? nodeTemp + '\u00b0C' : '\u2014'}</span></div>
+                              <div>💧 <span style="color:#2b6cb0">${nodeHum !== '\u2014' ? nodeHum + '%' : '\u2014'}</span></div>
+                            `;
+                            el.style.display = 'block';
+                          },
+                          mousemove(e) {
+                            const el = deviceTooltipRef.current;
+                            if (!el || el.style.display === 'none') return;
+                            const cp = e.containerPoint;
+                            el.style.left = (cp.x + 14) + 'px';
+                            el.style.top  = (cp.y - 80) + 'px';
+                          },
+                          mouseout() {
+                            if (deviceTooltipRef.current) deviceTooltipRef.current.style.display = 'none';
+                          },
+                        }}
+                      >
+                        <Popup>
+                          <div style={{ minWidth: 140 }}>
+                            <strong>{node.name}</strong>
+                            {node.forecast[0] && (
+                              <div style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                                Next: {node.forecast[0].temperature}°C / {node.forecast[0].humidity}%
+                              </div>
+                            )}
+                            {pendingPositions[node.device_id] && (
+                              <button
+                                onClick={() => saveNodePosition(node.device_id)}
+                                style={{ marginTop: 6, padding: '3px 10px', background: 'var(--primary-color)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}
+                              >
+                                Save position
+                              </button>
+                            )}
+                          </div>
+                        </Popup>
+                      </Marker>
+                    );
+                  })}
+                  {/* Tile hover handler — reads latlng, maps to grid cell, no drag interference */}
+                  {spatialData && (() => {
+                    const slice = spatialData.heatmaps[sliceIdx];
+                    if (!slice) return null;
+                    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
+                    const H = grid.length, W = grid[0].length;
+                    const BOUNDS = [[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]];
+                    return (
+                      <MapHoverHandler
+                        grid={grid} W={W} H={H} bounds={BOUNDS}
+                        spatialMode={spatialMode}
+                        tooltipRef={tileTooltipRef}
+                      />
+                    );
+                  })()}
+                </MapContainer>
+                </div> {/* end inner clip div */}
+
+                {/* Device tooltip — pure DOM, no React state */}
+                <div ref={deviceTooltipRef} style={{
+                  display: 'none', position: 'absolute',
+                  background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+                  padding: '7px 12px', fontSize: '0.82rem', fontFamily: "'Inter',sans-serif",
+                  lineHeight: 1.6, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+                  pointerEvents: 'none', zIndex: 9999, whiteSpace: 'nowrap',
+                }} />
+
+                {/* Tile tooltip — pure DOM, no React state */}
+                <div ref={tileTooltipRef} style={{
+                  display: 'none', position: 'absolute',
+                  background: 'rgba(26,32,44,0.9)', color: '#fc8181',
+                  padding: '4px 9px', borderRadius: '5px', fontSize: '0.78rem',
+                  fontFamily: "'Inter',sans-serif", pointerEvents: 'none',
+                  zIndex: 9998, boxShadow: '0 2px 8px rgba(0,0,0,0.25)', whiteSpace: 'nowrap',
+                }} />
+              </div> {/* end outer positioning wrapper */}
 
               {/* Color legend */}
               <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                 {spatialMode === 'temperature' ? (
                   <>
                     <span>15°C</span>
-                    <div style={{ flex: 1, position: 'relative', height: '10px' }}>
-                      <div style={{ width: '100%', height: '100%', borderRadius: '5px', background: 'linear-gradient(to right, #1e64ff, #32c832, #e64632)' }} />
-                      {hoverInfo && (
-                        <div style={{
-                          position: 'absolute',
-                          left: `${Math.max(0, Math.min(100, (hoverInfo.value - 15) / 25 * 100))}%`,
-                          top: '-4px', transform: 'translateX(-50%)',
-                          width: '3px', height: '18px',
-                          background: 'rgba(26,32,44,0.85)', borderRadius: '2px', pointerEvents: 'none',
-                        }} />
-                      )}
-                    </div>
+                    <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #1e64ff, #32c832, #e64632)' }} />
                     <span>40°C</span>
                   </>
                 ) : (
                   <>
                     <span>0%</span>
-                    <div style={{ flex: 1, position: 'relative', height: '10px' }}>
-                      <div style={{ width: '100%', height: '100%', borderRadius: '5px', background: 'linear-gradient(to right, #f0a032, #1e64dc)' }} />
-                      {hoverInfo && (
-                        <div style={{
-                          position: 'absolute',
-                          left: `${Math.max(0, Math.min(100, hoverInfo.value))}%`,
-                          top: '-4px', transform: 'translateX(-50%)',
-                          width: '3px', height: '18px',
-                          background: 'rgba(26,32,44,0.85)', borderRadius: '2px', pointerEvents: 'none',
-                        }} />
-                      )}
-                    </div>
+                    <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #f0a032, #1e64dc)' }} />
                     <span>100%</span>
                   </>
                 )}
               </div>
+
+              {/* Toast notification */}
+              {toast && (
+                <div style={{
+                  position: 'fixed',
+                  bottom: '2rem',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  background: 'linear-gradient(135deg, #38a169, #276749)',
+                  color: '#fff',
+                  padding: '0.75rem 1.5rem',
+                  borderRadius: '10px',
+                  fontFamily: "'Inter',sans-serif",
+                  fontWeight: 600,
+                  fontSize: '0.9rem',
+                  boxShadow: '0 8px 30px rgba(56,161,105,0.45)',
+                  zIndex: 99999,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  animation: 'fadeInUp 0.3s ease',
+                }}>
+                  <span style={{ fontSize: '1.1rem' }}>✅</span> {toast.message}
+                </div>
+              )}
             </div>
           ) : null
         )}

@@ -9,19 +9,27 @@ from pydantic import BaseModel
 from typing import Optional, List
 import uvicorn
 
-# ============================================================
-# CẤU HÌNH — phải khớp với lúc train
-# ============================================================
-WINDOW_SIZE  = 30
-HORIZON      = 15
-INPUT_SIZE   = 2
-HIDDEN_SIZE  = 64
-NUM_LAYERS   = 2
+INPUT_SIZE = 2
+
+# Short model config (minute-level)
+SHORT_WINDOW  = 30
+SHORT_HORIZON = 15
+SHORT_HIDDEN  = 64
+
+# Long model config (hour-level)
+LONG_WINDOW   = 48
+LONG_HORIZON  = 24
+LONG_HIDDEN   = 128
 
 HORIZON_OPTIONS = {
-    "6min":  6,
-    "10min": 10,
-    "15min": 15,
+    "6min":  {"steps": 6,  "model": "short"},
+    "10min": {"steps": 10, "model": "short"},
+    "15min": {"steps": 15, "model": "short"},
+    "1h":    {"steps": 1,  "model": "long"},
+    "3h":    {"steps": 3,  "model": "long"},
+    "6h":    {"steps": 6,  "model": "long"},
+    "12h":   {"steps": 12, "model": "long"},
+    "24h":   {"steps": 24, "model": "long"},
 }
 
 DB_CONFIG = {
@@ -33,40 +41,54 @@ DB_CONFIG = {
 
 
 # ============================================================
-# Model
+# Model — parametric so the same class handles both checkpoints
 # ============================================================
 class LSTMModel(nn.Module):
-    def __init__(self):
+    def __init__(self, horizon, hidden_size=64, num_layers=2):
         super().__init__()
+        self.horizon = horizon
         self.lstm = nn.LSTM(
             input_size  = INPUT_SIZE,
-            hidden_size = HIDDEN_SIZE,
-            num_layers  = NUM_LAYERS,
+            hidden_size = hidden_size,
+            num_layers  = num_layers,
             batch_first = True,
             dropout     = 0.3,
         )
-        self.fc = nn.Linear(HIDDEN_SIZE, HORIZON * INPUT_SIZE)
+        self.fc = nn.Linear(hidden_size, horizon * INPUT_SIZE)
 
     def forward(self, x):
         out, _ = self.lstm(x)
         out = self.fc(out[:, -1, :])
-        return out.view(-1, HORIZON, INPUT_SIZE)
+        return out.view(-1, self.horizon, INPUT_SIZE)
 
 
 # ============================================================
-# Load model + scaler 1 lần khi khởi động server
+# Load models at startup
 # ============================================================
-app    = FastAPI(
+app = FastAPI(
     title       = "LSTM Forecast API",
-    description = "Dự báo nhiệt độ & độ ẩm theo mốc 6 / 10 / 15 phút",
-    version     = "2.0.0",
+    description = "Temperature & humidity forecast — short (6/10/15 min) and long (1h/3h/6h/12h/24h)",
+    version     = "3.0.0",
 )
 
-model = LSTMModel()
-model.load_state_dict(torch.load("lstm_model.pth", map_location="cpu"))
-model.eval()
-scaler = joblib.load("scaler.pkl")
-print("Model và scaler đã load xong.")
+model_short = LSTMModel(horizon=SHORT_HORIZON, hidden_size=SHORT_HIDDEN)
+model_short.load_state_dict(torch.load("lstm_model.pth", map_location="cpu"))
+model_short.eval()
+scaler_short = joblib.load("scaler.pkl")
+print("Short-horizon model loaded (lstm_model.pth).")
+
+try:
+    model_long = LSTMModel(horizon=LONG_HORIZON, hidden_size=LONG_HIDDEN)
+    model_long.load_state_dict(torch.load("lstm_model_long.pth", map_location="cpu"))
+    model_long.eval()
+    scaler_long = joblib.load("scaler_long.pkl")
+    long_model_ready = True
+    print("Long-horizon model loaded (lstm_model_long.pth).")
+except FileNotFoundError:
+    model_long       = None
+    scaler_long      = None
+    long_model_ready = False
+    print("Long-horizon model not found — run lstm_train_long.py to train it.")
 
 
 # ============================================================
@@ -78,36 +100,36 @@ class ForecastPoint(BaseModel):
     humidity:    float
 
 class ForecastResponse(BaseModel):
-    device_id:   Optional[int]
-    horizon:     str
-    steps:       int
-    forecast:    List[ForecastPoint]
+    device_id: Optional[int]
+    horizon:   str
+    steps:     int
+    forecast:  List[ForecastPoint]
 
 
 # ============================================================
-# Helper: lấy dữ liệu mới nhất từ DB
+# Helper: fetch latest N points at the given granularity
 # ============================================================
-def fetch_latest(device_id: Optional[int] = None) -> pd.DataFrame:
+def fetch_latest(device_id: Optional[int], granularity: str, window_size: int) -> pd.DataFrame:
     conn = psycopg2.connect(**DB_CONFIG)
-    where = f"WHERE device_id = {device_id}" if device_id else ""
+    where = f"AND device_id = {device_id}" if device_id else ""
     query = f"""
         SELECT
-            date_trunc('minute', timestamp) AS ts,
+            date_trunc('{granularity}', timestamp) AS ts,
             AVG(temperature) AS temperature,
             AVG(humidity)    AS humidity
         FROM readings
-        {where}
-        GROUP BY date_trunc('minute', timestamp)
+        WHERE 1=1 {where}
+        GROUP BY date_trunc('{granularity}', timestamp)
         ORDER BY ts DESC
-        LIMIT {WINDOW_SIZE};
+        LIMIT {window_size};
     """
     df = pd.read_sql(query, conn, parse_dates=["ts"])
     conn.close()
 
-    if len(df) < WINDOW_SIZE:
+    if len(df) < window_size:
         raise HTTPException(
             status_code = 400,
-            detail      = f"Không đủ dữ liệu: cần {WINDOW_SIZE} điểm, hiện có {len(df)}",
+            detail      = f"Not enough data: need {window_size} {granularity}-level points, have {len(df)}",
         )
 
     return df.iloc[::-1].reset_index(drop=True)
@@ -118,33 +140,51 @@ def fetch_latest(device_id: Optional[int] = None) -> pd.DataFrame:
 # ============================================================
 @app.get("/forecast", response_model=ForecastResponse)
 def forecast(
-    device_id: Optional[int] = Query(default=None,  description="ID thiết bị (bỏ trống = tất cả)"),
-    horizon:   str            = Query(default="6min", description="Mốc dự báo: 6min | 10min | 15min"),
+    device_id: Optional[int] = Query(default=None,   description="Device ID (omit for all devices)"),
+    horizon:   str            = Query(default="6min", description="6min | 10min | 15min | 1h | 3h | 6h | 12h | 24h"),
 ):
     if horizon not in HORIZON_OPTIONS:
         raise HTTPException(
             status_code = 400,
-            detail      = f"horizon không hợp lệ. Chọn một trong: {list(HORIZON_OPTIONS.keys())}",
+            detail      = f"Invalid horizon. Choose one of: {list(HORIZON_OPTIONS.keys())}",
         )
 
-    steps = HORIZON_OPTIONS[horizon]
-    df    = fetch_latest(device_id)
+    cfg        = HORIZON_OPTIONS[horizon]
+    steps      = cfg["steps"]
+    model_type = cfg["model"]
 
-    # Chuẩn hóa + inference
-    scaled = scaler.transform(df[["temperature", "humidity"]])
+    if model_type == "long":
+        if not long_model_ready:
+            raise HTTPException(
+                status_code = 503,
+                detail      = "Long-horizon model not trained yet. Run lstm_train_long.py first.",
+            )
+        mdl         = model_long
+        scl         = scaler_long
+        window_size = LONG_WINDOW
+        granularity = "hour"
+        delta_fn    = lambda i: pd.Timedelta(hours=i + 1)
+    else:
+        mdl         = model_short
+        scl         = scaler_short
+        window_size = SHORT_WINDOW
+        granularity = "minute"
+        delta_fn    = lambda i: pd.Timedelta(minutes=i + 1)
+
+    df = fetch_latest(device_id, granularity, window_size)
+
+    scaled = scl.transform(df[["temperature", "humidity"]])
     X = torch.tensor(scaled, dtype=torch.float32).unsqueeze(0)
 
     with torch.no_grad():
-        pred_scaled = model(X).squeeze(0).numpy()   # (15, 2)
+        pred_scaled = mdl(X).squeeze(0).numpy()
 
-    # Inverse transform rồi slice
-    pred_real = scaler.inverse_transform(pred_scaled)[:steps]  # (steps, 2)
+    pred_real = scl.inverse_transform(pred_scaled)[:steps]
 
-    # Tạo timestamps
     last_ts = df["ts"].iloc[-1]
     points  = [
         ForecastPoint(
-            timestamp   = (last_ts + pd.Timedelta(minutes=i + 1)).isoformat(),
+            timestamp   = (last_ts + delta_fn(i)).isoformat(),
             temperature = round(float(pred_real[i, 0]), 2),
             humidity    = round(float(pred_real[i, 1]), 2),
         )
@@ -160,17 +200,22 @@ def forecast(
 
 
 # ============================================================
-# Route: GET /horizons — liệt kê các mốc được hỗ trợ
+# Route: GET /horizons
 # ============================================================
 @app.get("/horizons")
 def list_horizons():
     return {
-        "available_horizons": list(HORIZON_OPTIONS.keys()),
-        "description": {
-            "6min":  "Dự báo 6 phút tiếp theo",
-            "10min": "Dự báo 10 phút tiếp theo",
-            "15min": "Dự báo 15 phút tiếp theo",
-        }
+        "short": {
+            "model_file": "lstm_model.pth",
+            "granularity": "minute",
+            "available": ["6min", "10min", "15min"],
+        },
+        "long": {
+            "model_file": "lstm_model_long.pth",
+            "granularity": "hour",
+            "available": ["1h", "3h", "6h", "12h", "24h"],
+            "ready": long_model_ready,
+        },
     }
 
 
@@ -180,10 +225,9 @@ def list_horizons():
 @app.get("/health")
 def health():
     return {
-        "status":  "ok",
-        "model":   "LSTM v2",
-        "window":  WINDOW_SIZE,
-        "horizon": HORIZON,
+        "status":            "ok",
+        "short_model_ready": True,
+        "long_model_ready":  long_model_ready,
         "supported_horizons": list(HORIZON_OPTIONS.keys()),
     }
 
