@@ -26,6 +26,7 @@ app.set('alertService', alertService);
 const authRoutes = require('./routes/auth');
 const usersRoutes = require('./routes/users');
 const devicesRoutes = require('./routes/devices');
+const roomsRoutes = require('./routes/rooms');
 const dataRoutes = require('./routes/data');
 const alertsRoutes = require('./routes/alerts');
 const forecastRoutes = require('./routes/forecast')
@@ -36,6 +37,7 @@ app.use('/api/spatial-forecast', spatialForecastRoutes)
 app.use('/api/auth', authRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/devices', devicesRoutes);
+app.use('/api/rooms', roomsRoutes);
 app.use('/api/data', dataRoutes);
 app.use('/api/alerts', alertsRoutes);
 

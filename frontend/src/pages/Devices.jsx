@@ -30,10 +30,26 @@ export default function Devices() {
     const [editLat, setEditLat] = useState('');
     const [editLng, setEditLng] = useState('');
 
-    const ROOM_BOUNDS = {
-        minLat: 20.9076452751, maxLat: 20.9077081569,
-        minLng: 105.8533152221, maxLng: 105.8533825361,
-        size: 7 // 7 meters
+    const [editRoomId, setEditRoomId] = useState('');
+    const [rooms, setRooms] = useState([]);
+
+    const getRoomBounds = (roomId) => {
+        if (!roomId) return null;
+        const room = rooms.find(r => r.id === parseInt(roomId));
+        if (!room) return null;
+        const lat_deg_per_m = 1 / 111320;
+        const lng_deg_per_m = 1 / (111320 * Math.cos(room.center_lat * Math.PI / 180));
+        const halfWidth = room.width_m / 2;
+        const halfLength = room.length_m / 2;
+
+        return {
+            minLat: room.center_lat - halfLength * lat_deg_per_m,
+            maxLat: room.center_lat + halfLength * lat_deg_per_m,
+            minLng: room.center_lng - halfWidth * lng_deg_per_m,
+            maxLng: room.center_lng + halfWidth * lng_deg_per_m,
+            width: room.width_m,
+            length: room.length_m
+        };
     };
 
     const socketRef = useRef(null);
@@ -57,6 +73,12 @@ export default function Devices() {
                 }
             });
             setDevices(data);
+            
+            // Also fetch rooms
+            const roomsRes = await apiFetch('/api/rooms');
+            if (roomsRes.ok) {
+                setRooms(await roomsRes.json());
+            }
         } catch (err) {
             console.error(err);
         }
@@ -138,6 +160,7 @@ export default function Devices() {
                     ...payload,
                     lat: editLat !== '' ? parseFloat(editLat) : null,
                     lng: editLng !== '' ? parseFloat(editLng) : null,
+                    room_id: editRoomId ? parseInt(editRoomId) : null,
                 })
             });
             if(!res.ok) throw new Error("Update failed");
@@ -166,38 +189,47 @@ export default function Devices() {
         setEditY(d.y ?? '');
         setEditLat(d.lat ?? '');
         setEditLng(d.lng ?? '');
+        setEditRoomId(d.room_id ?? '');
         setIsEditModalOpen(true);
     };
 
     const handleXChange = (val) => {
         setEditX(val);
         if (val === '') { setEditLng(''); return; }
+        const bounds = getRoomBounds(editRoomId);
+        if (!bounds) return;
         const x = parseFloat(val);
-        const lng = ROOM_BOUNDS.minLng + (x / ROOM_BOUNDS.size) * (ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng);
+        const lng = bounds.minLng + (x / bounds.width) * (bounds.maxLng - bounds.minLng);
         setEditLng(lng.toFixed(10));
     };
 
     const handleYChange = (val) => {
         setEditY(val);
         if (val === '') { setEditLat(''); return; }
+        const bounds = getRoomBounds(editRoomId);
+        if (!bounds) return;
         const y = parseFloat(val);
-        const lat = ROOM_BOUNDS.minLat + (y / ROOM_BOUNDS.size) * (ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat);
+        const lat = bounds.minLat + (y / bounds.length) * (bounds.maxLat - bounds.minLat);
         setEditLat(lat.toFixed(10));
     };
 
     const handleLatChange = (val) => {
         setEditLat(val);
         if (val === '') { setEditY(''); return; }
+        const bounds = getRoomBounds(editRoomId);
+        if (!bounds) return;
         const lat = parseFloat(val);
-        const y = ((lat - ROOM_BOUNDS.minLat) / (ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat)) * ROOM_BOUNDS.size;
+        const y = ((lat - bounds.minLat) / (bounds.maxLat - bounds.minLat)) * bounds.length;
         setEditY(y.toFixed(2));
     };
 
     const handleLngChange = (val) => {
         setEditLng(val);
         if (val === '') { setEditX(''); return; }
+        const bounds = getRoomBounds(editRoomId);
+        if (!bounds) return;
         const lng = parseFloat(val);
-        const x = ((lng - ROOM_BOUNDS.minLng) / (ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng)) * ROOM_BOUNDS.size;
+        const x = ((lng - bounds.minLng) / (bounds.maxLng - bounds.minLng)) * bounds.width;
         setEditX(x.toFixed(2));
     };
 
@@ -347,18 +379,31 @@ export default function Devices() {
                                 <input type="number" step="1" value={editHumLow} onChange={e => setEditHumLow(e.target.value)} />
                             </div>
                         </div>
-
-                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Position (x / y) — 0 to 7 m</h4>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                            <div className="form-group">
-                                <label>X (m)</label>
-                                <input type="number" min="0" max="7" step="0.01" placeholder="e.g. 1.5" value={editX} onChange={e => handleXChange(e.target.value)} />
-                            </div>
-                            <div className="form-group">
-                                <label>Y (m)</label>
-                                <input type="number" min="0" max="7" step="0.01" placeholder="e.g. 3.0" value={editY} onChange={e => handleYChange(e.target.value)} />
-                            </div>
+                        
+                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Room Assignment</h4>
+                        <div className="form-group">
+                            <label>Assigned Room</label>
+                            <select value={editRoomId} onChange={e => setEditRoomId(e.target.value)}>
+                                <option value="">-- No Room --</option>
+                                {rooms.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                            </select>
                         </div>
+
+                        <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Position (x / y)</h4>
+                        {editRoomId ? (
+                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
+                                <div className="form-group">
+                                    <label>X (m)</label>
+                                    <input type="number" min="0" max={getRoomBounds(editRoomId)?.width} step="0.01" placeholder="e.g. 1.5" value={editX} onChange={e => handleXChange(e.target.value)} />
+                                </div>
+                                <div className="form-group">
+                                    <label>Y (m)</label>
+                                    <input type="number" min="0" max={getRoomBounds(editRoomId)?.length} step="0.01" placeholder="e.g. 3.0" value={editY} onChange={e => handleYChange(e.target.value)} />
+                                </div>
+                            </div>
+                        ) : (
+                            <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Select a room first to enable local coordinates.</p>
+                        )}
 
                         <h4 style={{ marginBottom: '0.5rem', marginTop: '1rem' }}>Geographic Coordinates (Lat/Lng)</h4>
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>

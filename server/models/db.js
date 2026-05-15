@@ -26,6 +26,27 @@ async function initializeDb() {
         `);
 
         await pool.query(`
+            CREATE TABLE IF NOT EXISTS rooms (
+                id SERIAL PRIMARY KEY,
+                name VARCHAR(255) NOT NULL,
+                description TEXT,
+                center_lat REAL NOT NULL,
+                center_lng REAL NOT NULL,
+                width_m REAL NOT NULL DEFAULT 7,
+                length_m REAL NOT NULL DEFAULT 7,
+                owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+
+        // Migration for existing databases
+        await pool.query(`
+            ALTER TABLE rooms DROP COLUMN IF EXISTS size_m;
+            ALTER TABLE rooms ADD COLUMN IF NOT EXISTS width_m REAL NOT NULL DEFAULT 7;
+            ALTER TABLE rooms ADD COLUMN IF NOT EXISTS length_m REAL NOT NULL DEFAULT 7;
+        `);
+
+        await pool.query(`
             CREATE TABLE IF NOT EXISTS devices (
                 id SERIAL PRIMARY KEY,
                 name VARCHAR(255) NOT NULL,
@@ -39,6 +60,12 @@ async function initializeDb() {
                 hum_low REAL,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+        `);
+
+        // Add room_id to devices if it doesn't exist (for existing databases)
+        await pool.query(`
+            ALTER TABLE devices 
+            ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;
         `);
 
         await pool.query(`

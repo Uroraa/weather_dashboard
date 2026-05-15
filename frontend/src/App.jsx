@@ -9,6 +9,7 @@ import Devices from './pages/Devices';
 import DeviceDetails from './pages/DeviceDetails';
 import Alerts from './pages/Alerts';
 import Forecast from './pages/Forecast';
+import Rooms from './pages/Rooms';
 import Admin from './pages/Admin';
 import Account from './pages/Account';
 
@@ -24,6 +25,7 @@ function App() {
             <Route path="device" element={<DeviceDetails />} />
             <Route path="alerts" element={<Alerts />} />
             <Route path="forecast" element={<Forecast />} />
+            <Route path="rooms" element={<Rooms />} />
             <Route path="admin" element={<Admin />} />
             <Route path="account" element={<Account />} />
           </Route>

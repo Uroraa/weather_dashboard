@@ -27,6 +27,7 @@ const Layout = () => {
             case '/device': return 'Device Details';
             case '/alerts': return 'Alerts';
             case '/forecast': return 'Forecast';
+            case '/rooms': return 'Rooms Management';
             case '/admin': return 'Admin Portal';
             case '/account': return 'Account Management';
             default: return 'IoT Monitor';
@@ -57,6 +58,10 @@ const Layout = () => {
                     <NavLink to="/forecast" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
                         <i className="ph ph-cloud-sun"></i>
                         <span>Forecast</span>
+                    </NavLink>
+                    <NavLink to="/rooms" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                        <i className="ph ph-house"></i>
+                        <span>Rooms</span>
                     </NavLink>
 
                     {isAuthenticated && user?.role === 'admin' && (

@@ -60,7 +60,7 @@ model  = LSTMModel()
 model.load_state_dict(torch.load("lstm_model.pth", map_location="cpu"))
 model.eval()
 scaler = joblib.load("scaler.pkl")
-print("Model và scaler đã load xong.")
+print("Model and scaler loaded successfully.")
 
 
 # ============================================================
@@ -70,13 +70,37 @@ def get_conn():
     return psycopg2.connect(**DB_CONFIG)
 
 
-def fetch_devices() -> pd.DataFrame:
+def fetch_room(room_id: int) -> dict:
+    """Lấy thông tin phòng để tính toán grid."""
+    conn = get_conn()
+    df = pd.read_sql(f"SELECT * FROM rooms WHERE id = {room_id}", conn)
+    conn.close()
+    if df.empty:
+        raise HTTPException(status_code=404, detail="Room not found")
+    row = df.iloc[0]
+    
+    # 1 độ vĩ độ ~ 111320m. 
+    # 1 độ kinh độ ~ 111320m * cos(lat)
+    lat_deg_per_m = 1 / 111320
+    lng_deg_per_m = 1 / (111320 * np.cos(np.radians(row["center_lat"])))
+    
+    half_width = row["width_m"] / 2
+    half_length = row["length_m"] / 2
+    return {
+        "min_lat": row["center_lat"] - half_length * lat_deg_per_m,
+        "max_lat": row["center_lat"] + half_length * lat_deg_per_m,
+        "min_lng": row["center_lng"] - half_width * lng_deg_per_m,
+        "max_lng": row["center_lng"] + half_width * lng_deg_per_m,
+    }
+
+
+def fetch_devices(room_id: Optional[int] = None) -> pd.DataFrame:
     """Lấy danh sách thiết bị và tọa độ từ DB."""
     conn = get_conn()
-    df = pd.read_sql(
-        "SELECT id, name, x, y, lat, lng FROM devices WHERE lat IS NOT NULL AND lng IS NOT NULL",
-        conn
-    )
+    query = "SELECT id, name, x, y, lat, lng FROM devices WHERE lat IS NOT NULL AND lng IS NOT NULL"
+    if room_id is not None:
+        query += f" AND room_id = {room_id}"
+    df = pd.read_sql(query, conn)
     conn.close()
     return df
 
@@ -166,10 +190,10 @@ def make_virtual_nodes(real_nodes: list[dict]) -> list[dict]:
 # ============================================================
 # Kriging nội suy toàn grid
 # ============================================================
-def kriging_grid(nodes: list[dict], field: str) -> np.ndarray:
+def kriging_grid(nodes: list[dict], field: str, grid_lng: np.ndarray, grid_lat: np.ndarray) -> np.ndarray:
     """
     nodes: list dict có lat, lng, và field (temp hoặc humi)
-    return: grid (len(GRID_LAT), len(GRID_LNG)) = (40, 50)
+    return: grid (len(grid_lat), len(grid_lng))
     """
     lats = np.array([n["lat"] for n in nodes])
     lngs = np.array([n["lng"] for n in nodes])
@@ -182,12 +206,12 @@ def kriging_grid(nodes: list[dict], field: str) -> np.ndarray:
             verbose=False,
             enable_plotting=False,
         )
-        z_grid, _ = ok.execute("grid", GRID_LNG, GRID_LAT)
-        return np.array(z_grid)  # (40, 50)
+        z_grid, _ = ok.execute("grid", grid_lng, grid_lat)
+        return np.array(z_grid)
     except Exception:
         # Fallback về IDW nếu Kriging lỗi (ít node quá)
         points = np.column_stack([lngs, lats])
-        gx, gy = np.meshgrid(GRID_LNG, GRID_LAT)
+        gx, gy = np.meshgrid(grid_lng, grid_lat)
         z_grid = griddata(points, zs, (gx, gy), method="linear")
         return np.nan_to_num(z_grid, nan=float(np.nanmean(zs)))
 
@@ -221,10 +245,15 @@ class SpatialForecastResponse(BaseModel):
 # Route: GET /spatial-forecast
 # ============================================================
 @app.get("/spatial-forecast", response_model=SpatialForecastResponse)
-def spatial_forecast():
-    devices = fetch_devices()
+def spatial_forecast(room_id: int):
+    # Lấy thông tin phòng và tạo grid
+    bounds = fetch_room(room_id)
+    grid_lat = np.linspace(bounds["min_lat"], bounds["max_lat"], 40)
+    grid_lng = np.linspace(bounds["min_lng"], bounds["max_lng"], 50)
+
+    devices = fetch_devices(room_id)
     if len(devices) < 1:
-        raise HTTPException(status_code=400, detail="Không có thiết bị nào có tọa độ.")
+        raise HTTPException(status_code=400, detail="Không có thiết bị nào có tọa độ trong phòng này.")
 
     # --- Bước 1: Chạy LSTM một lần cho mỗi device, đồng thời lấy reading hiện tại ---
     per_device = []   # {device_id, name, x, y, current, pred}
@@ -309,12 +338,12 @@ def spatial_forecast():
         ]
         virtual_curr = make_virtual_nodes(nodes_curr)
         all_curr     = nodes_curr + virtual_curr
-        temp_now = kriging_grid(all_curr, "temp")
-        humi_now = kriging_grid(all_curr, "humi")
+        temp_now = kriging_grid(all_curr, "temp", grid_lng, grid_lat)
+        humi_now = kriging_grid(all_curr, "humi", grid_lng, grid_lat)
         heatmaps.append(HeatmapSlice(
             horizon_minute=0,
-            temperature=np.round(temp_now, 2).tolist(),
-            humidity=np.round(humi_now, 2).tolist(),
+            temperature=np.round(temp_now[::-1], 2).tolist(),
+            humidity=np.round(humi_now[::-1], 2).tolist(),
         ))
         print(f"[Spatial] horizon_minute=0 (Now) heatmap built from actual readings")
     else:
@@ -328,17 +357,17 @@ def spatial_forecast():
         ]
         virtual_h   = make_virtual_nodes(nodes_h)
         all_nodes_h = nodes_h + virtual_h
-        temp_grid   = kriging_grid(all_nodes_h, "temp")
-        humi_grid   = kriging_grid(all_nodes_h, "humi")
+        temp_grid   = kriging_grid(all_nodes_h, "temp", grid_lng, grid_lat)
+        humi_grid   = kriging_grid(all_nodes_h, "humi", grid_lng, grid_lat)
         heatmaps.append(HeatmapSlice(
             horizon_minute=h + 1,
-            temperature=np.round(temp_grid, 2).tolist(),
-            humidity=np.round(humi_grid, 2).tolist(),
+            temperature=np.round(temp_grid[::-1], 2).tolist(),
+            humidity=np.round(humi_grid[::-1], 2).tolist(),
         ))
 
     return SpatialForecastResponse(
-        grid_lat=GRID_LAT.tolist(),
-        grid_lng=GRID_LNG.tolist(),
+        grid_lat=grid_lat.tolist(),
+        grid_lng=grid_lng.tolist(),
         nodes=node_forecasts,
         heatmaps=heatmaps,
     )

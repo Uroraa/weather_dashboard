@@ -18,7 +18,9 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
         if (req.user && req.user.role === 'admin') {
             devicesRes = await db.query(`
                 SELECT d.*, u.name as owner_name, 
-                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
+                       (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
                 FROM devices d 
                 JOIN users u ON d.owner_user_id = u.id 
                 ORDER BY d.created_at DESC
@@ -26,14 +28,18 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
         } else if (req.user) {
             devicesRes = await db.query(`
                 SELECT d.*, 
-                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
+                       (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
                 FROM devices d 
                 WHERE owner_user_id = $1 ORDER BY created_at DESC
             `, [req.user.id]);
         } else {
             devicesRes = await db.query(`
                 SELECT d.*, 
-                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading
+                       (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
+                       (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
                 FROM devices d ORDER BY created_at DESC
             `);
         }
@@ -61,7 +67,7 @@ router.get('/:id', optionalAuthenticateToken, async (req, res) => {
 // Create a new device
 router.post('/', authenticateToken, async (req, res) => {
     try {
-        const { name, description, mac_address } = req.body;
+        const { name, description, mac_address, room_id } = req.body;
         if (!name) return res.status(400).json({ error: 'Device name is required' });
 
         const apiKey = uuidv4();
@@ -72,17 +78,17 @@ router.post('/', authenticateToken, async (req, res) => {
                 return res.status(409).json({ error: 'A device with this MAC address is already registered' });
             }
             const result = await db.query(
-                `INSERT INTO devices (name, description, owner_user_id, api_key, mac_address)
-                 VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-                [name, description || '', req.user.id, apiKey, mac_address]
+                `INSERT INTO devices (name, description, owner_user_id, api_key, mac_address, room_id)
+                 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+                [name, description || '', req.user.id, apiKey, mac_address, room_id || null]
             );
             publishDeviceConfig(mac_address, result.rows[0].id, apiKey);
             removePendingDevice(mac_address);
         } else {
             await db.query(
-                `INSERT INTO devices (name, description, owner_user_id, api_key)
-                 VALUES ($1, $2, $3, $4)`,
-                [name, description || '', req.user.id, apiKey]
+                `INSERT INTO devices (name, description, owner_user_id, api_key, room_id)
+                 VALUES ($1, $2, $3, $4, $5)`,
+                [name, description || '', req.user.id, apiKey, room_id || null]
             );
         }
 
@@ -93,11 +99,11 @@ router.post('/', authenticateToken, async (req, res) => {
     }
 });
 
-// Update device thresholds & email notify setting
+// Update device thresholds & email notify setting & room
 router.put('/:id', authenticateToken, async (req, res) => {
     try {
-        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y, lat, lng } = req.body;
-        const deviceRes = await db.query('SELECT owner_user_id, x, y, lat, lng FROM devices WHERE id = $1', [req.params.id]);
+        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y, lat, lng, room_id } = req.body;
+        const deviceRes = await db.query('SELECT owner_user_id, x, y, lat, lng, room_id FROM devices WHERE id = $1', [req.params.id]);
         const device = deviceRes.rows[0];
 
         if (!device) return res.status(404).json({ error: 'Device not found' });
@@ -106,21 +112,18 @@ router.put('/:id', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Access denied' });
         }
 
-        let finalX = device.x, finalY = device.y, finalLat = device.lat, finalLng = device.lng;
+        let finalX = x !== undefined ? x : device.x;
+        let finalY = y !== undefined ? y : device.y;
+        let finalLat = lat !== undefined ? lat : device.lat;
+        let finalLng = lng !== undefined ? lng : device.lng;
+        let finalRoomId = room_id !== undefined ? room_id : device.room_id;
 
-        if (x != null && y != null) {
-            finalX = x; finalY = y;
-            const geo = xyToLatLng(x, y);
-            finalLat = geo.lat; finalLng = geo.lng;
-        } else if (lat != null && lng != null) {
-            finalLat = lat; finalLng = lng;
-            const xy = latLngToXY(lat, lng);
-            finalX = xy.x; finalY = xy.y;
-        }
+        // Note: For legacy support, if only x/y were provided, we used to convert here. 
+        // With dynamic rooms, the frontend calculates and sends both lat/lng and x/y.
 
         await db.query(
-            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7, lat=$8, lng=$9 WHERE id=$10`,
-            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, finalX, finalY, finalLat, finalLng, req.params.id]
+            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7, lat=$8, lng=$9, room_id=$10 WHERE id=$11`,
+            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, finalX, finalY, finalLat, finalLng, finalRoomId, req.params.id]
         );
 
         res.json({ message: 'Device updated successfully' });

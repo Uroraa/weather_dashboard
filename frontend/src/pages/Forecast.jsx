@@ -21,14 +21,12 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 
 const MIN_WINDOW = 24;
 
-// Single source of truth for horizon options — shared by both tabs
 const FORECAST_HORIZONS = [
   { value: '6min',  minutes: 6  },
   { value: '10min', minutes: 10 },
   { value: '15min', minutes: 15 },
 ];
 
-// --- Spatial heatmap helpers ---
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 function tempToRgb(val) {
@@ -46,7 +44,6 @@ function humToRgb(val) {
   return [Math.round(lerp(240, 30, t)), Math.round(lerp(160, 100, t)), Math.round(lerp(50, 220, t))];
 }
 
-// --- Single-device forecast chart ---
 const nowLinePlugin = {
   id: 'nowLine',
   afterDraw(chart) {
@@ -110,8 +107,6 @@ const chartOptions = {
   animation: { duration: 400, easing: 'easeOutQuart' }
 };
 
-// MapHoverHandler: writes tile values directly to a DOM ref — zero React state, zero re-renders.
-// Completely decoupled from marker drag; drag only touches pendingPositions on dragend.
 function MapHoverHandler({ grid, W, H, bounds, spatialMode, tooltipRef }) {
   const [[minLat, minLng], [maxLat, maxLng]] = bounds;
   useMapEvents({
@@ -147,11 +142,9 @@ function MapHoverHandler({ grid, W, H, bounds, spatialMode, tooltipRef }) {
 }
 
 export default function Forecast() {
-
   const { isAuthenticated, apiFetch } = useAuth();
   const { markDeviceOnline, markDeviceOffline, setActiveDeviceId } = useConnection();
 
-  // Single-device tab state
   const [devices, setDevices] = useState([]);
   const [selectedDevice, setSelectedDevice] = useState('');
   const [horizon, setHorizon] = useState(FORECAST_HORIZONS[0].value);
@@ -165,10 +158,7 @@ export default function Forecast() {
   const readingCountRef = useRef(0);
   const REFRESH_EVERY = 5;
 
-  // Tab state
   const [activeTab, setActiveTab] = useState('single');
-
-  // Spatial tab state
   const [spatialData, setSpatialData] = useState(null);
   const [spatialLoading, setSpatialLoading] = useState(false);
   const [spatialError, setSpatialError] = useState(null);
@@ -180,23 +170,40 @@ export default function Forecast() {
   const [pendingPositions, setPendingPositions] = useState({});
   const [isAnimating, setIsAnimating] = useState(false);
   const animIntervalRef = useRef(null);
-  const tileTooltipRef = useRef(null);         // DOM ref for tile value — zero React state
-  const deviceTooltipRef = useRef(null);       // DOM ref for device info — zero React state
+  const tileTooltipRef = useRef(null);
+  const deviceTooltipRef = useRef(null);
   const [dataFlash, setDataFlash] = useState(false);
-  const [toast, setToast] = useState(null);    // { message, id }
+  const [toast, setToast] = useState(null);
 
-  const ROOM_BOUNDS = {
-    minLat: 20.9076452751, maxLat: 20.9077081569,
-    minLng: 105.8533152221, maxLng: 105.8533825361
-  };
+  const [rooms, setRooms] = useState([]);
+  const [selectedRoom, setSelectedRoom] = useState('');
 
-  // Derive available horizon steps from heatmap data — synced with FORECAST_HORIZONS, no hard-coded indices
-  // "Now" is horizon_minute=0 (actual readings); forecast steps use findIndex on horizon_minute
+  const calcRoomBounds = useCallback((room) => {
+    if (!room) return null;
+    const lat_deg_per_m = 1 / 111320;
+    const lng_deg_per_m = 1 / (111320 * Math.cos(room.center_lat * Math.PI / 180));
+    const halfWidth = room.width_m / 2;
+    const halfLength = room.length_m / 2;
+    return {
+      minLat: room.center_lat - halfLength * lat_deg_per_m,
+      maxLat: room.center_lat + halfLength * lat_deg_per_m,
+      minLng: room.center_lng - halfWidth * lng_deg_per_m,
+      maxLng: room.center_lng + halfWidth * lng_deg_per_m,
+      width: room.width_m,
+      length: room.length_m
+    };
+  }, []);
+
+  const roomBounds = React.useMemo(() => {
+    if (!selectedRoom) return null;
+    const room = rooms.find(r => r.id === parseInt(selectedRoom));
+    return calcRoomBounds(room);
+  }, [selectedRoom, rooms, calcRoomBounds]);
+
   const spatialHorizons = spatialData
     ? [
         (() => {
           const idx = spatialData.heatmaps.findIndex(hm => hm.horizon_minute === 0);
-          // If service hasn't been updated yet, fall back to first heatmap but flag it as prediction
           if (idx >= 0) return { label: 'Now', idx };
           const fallback = spatialData.heatmaps.findIndex(hm => hm.horizon_minute === 1);
           return fallback >= 0 ? { label: 'Now (~)', idx: fallback } : null;
@@ -208,29 +215,32 @@ export default function Forecast() {
       ].filter(Boolean)
     : [];
 
-  // sliceIdx is derived, not state
   const sliceIdx = spatialHorizons[spatialHorizonStep]?.idx ?? 0;
 
-  // Load devices
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return; }
-    apiFetch('/api/devices')
-      .then(r => r.ok ? r.json() : Promise.reject())
-      .then(data => {
-        setDevices(data);
-        if (data.length > 0) setSelectedDevice(data[0].id.toString());
-      })
-      .catch(() => setDevices([]))
-      .finally(() => setLoading(false));
-  }, [isAuthenticated]);
+    Promise.all([
+      apiFetch('/api/devices').then(r => r.ok ? r.json() : []),
+      apiFetch('/api/rooms').then(r => r.ok ? r.json() : [])
+    ])
+    .then(([devData, roomData]) => {
+      setDevices(devData);
+      if (devData.length > 0) setSelectedDevice(devData[0].id.toString());
+      setRooms(roomData);
+      if (roomData.length > 0) setSelectedRoom(roomData[0].id.toString());
+    })
+    .catch(() => {
+      setDevices([]);
+      setRooms([]);
+    })
+    .finally(() => setLoading(false));
+  }, [isAuthenticated, apiFetch]);
 
-  // Sync activeDeviceId for topbar
   useEffect(() => {
     setActiveDeviceId(selectedDevice || null);
     return () => setActiveDeviceId(null);
   }, [selectedDevice, setActiveDeviceId]);
 
-  // Socket: real-time status + refresh trigger for both single-device and spatial
   useEffect(() => {
     if (!selectedDevice || !isAuthenticated) return;
     socketRef.current = io('/');
@@ -247,16 +257,15 @@ export default function Forecast() {
       if (readingCountRef.current >= REFRESH_EVERY) {
         readingCountRef.current = 0;
         setRefreshKey(k => k + 1);
-        setSpatialRefreshKey(k => k + 1); // spatial refreshes at same cadence
+        setSpatialRefreshKey(k => k + 1);
       }
     });
     return () => {
       if (socketRef.current) socketRef.current.disconnect();
       markDeviceOffline(selectedDevice);
     };
-  }, [selectedDevice, isAuthenticated]);
+  }, [selectedDevice, isAuthenticated, markDeviceOffline, markDeviceOnline]);
 
-  // Fetch single-device forecast
   useEffect(() => {
     if (!selectedDevice) return;
     readingCountRef.current = 0;
@@ -264,15 +273,6 @@ export default function Forecast() {
     setError(null);
     setChartData(null);
     setInsufficientData(false);
-
-    const deviceInfo = devices.find(d => d.id.toString() === selectedDevice);
-    if (deviceInfo?.last_reading) {
-      const elapsed = Date.now() - new Date(deviceInfo.last_reading).getTime();
-      if (elapsed < 10000) markDeviceOnline(selectedDevice, 'sensor');
-      else markDeviceOffline(selectedDevice);
-    } else {
-      markDeviceOffline(selectedDevice);
-    }
 
     apiFetch(`/api/devices/${selectedDevice}/readings?limit=30`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error('Failed to load readings')))
@@ -326,25 +326,26 @@ export default function Forecast() {
       })
       .catch(err => setError(err.message || 'Failed to load forecast'))
       .finally(() => setFetchingForecast(false));
-  }, [selectedDevice, horizon, refreshKey]);
+  }, [selectedDevice, horizon, refreshKey, apiFetch]);
 
-  // Fetch spatial forecast — spinner on first load, pulse border on subsequent refreshes
   useEffect(() => {
-    if (activeTab !== 'spatial' || !isAuthenticated) return;
-    if (!hasSpatialDataRef.current) {
+    if (activeTab !== 'spatial' || !isAuthenticated || !selectedRoom) return;
+    if (!hasSpatialDataRef.current && !spatialError) {
       setSpatialLoading(true);
-    } else {
+    } else if (hasSpatialDataRef.current) {
       setIsSpatialRefreshing(true);
     }
-    setSpatialError(null);
-    apiFetch('/api/forecast/spatial')
-      .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.error || 'Failed to load spatial forecast'))))
-      .then(data => { setSpatialData(data); hasSpatialDataRef.current = true; })
-      .catch(err => { if (!hasSpatialDataRef.current) setSpatialError(err.message || 'Spatial forecast service unavailable'); })
+    // Don't clear spatialError before fetch — keep showing current state
+    apiFetch(`/api/spatial-forecast?room_id=${selectedRoom}`)
+      .then(r => r.ok ? r.json() : r.json().then(d => Promise.reject(new Error(d.detail || d.error || 'Failed to load spatial forecast'))))
+      .then(data => { setSpatialData(data); setSpatialError(null); hasSpatialDataRef.current = true; })
+      .catch(err => { 
+        setSpatialError(err.message || 'Spatial forecast service unavailable');
+        setSpatialData(null); 
+      })
       .finally(() => { setSpatialLoading(false); setIsSpatialRefreshing(false); });
-  }, [activeTab, isAuthenticated, spatialRefreshKey]);
+  }, [activeTab, isAuthenticated, spatialRefreshKey, selectedRoom, apiFetch]);
 
-  // Timelapse animation
   useEffect(() => {
     if (!isAnimating) { clearInterval(animIntervalRef.current); return; }
     animIntervalRef.current = setInterval(() => {
@@ -359,7 +360,6 @@ export default function Forecast() {
     setTimeout(() => setToast(prev => prev?.id === id ? null : prev), 3000);
   }, []);
 
-  // Flash the map border green whenever spatial data refreshes (skip very first load)
   useEffect(() => {
     if (!hasSpatialDataRef.current) return;
     setDataFlash(true);
@@ -376,7 +376,6 @@ export default function Forecast() {
     showToast('New location saved');
   };
 
-  // Build a custom DivIcon with the device name label
   const makeDeviceIcon = (name) => L.divIcon({
     className: '',
     html: `
@@ -422,7 +421,6 @@ export default function Forecast() {
 
   return (
     <>
-      {/* Single-tab controls */}
       {activeTab === 'single' && (
         <div style={{ position: 'absolute', top: '90px', right: '35px', zIndex: 10, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <label htmlFor="forecast-horizon-selector" style={{ margin: 0 }}>Horizon:</label>
@@ -455,7 +453,6 @@ export default function Forecast() {
       )}
 
       <div style={{ marginTop: '2rem' }}>
-        {/* Tab switcher */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
           <button className={`btn ${activeTab === 'single' ? 'btn-primary' : 'btn-outline'}`} onClick={() => setActiveTab('single')}>
             <i className="ph ph-chart-line-up"></i> Single Device
@@ -465,7 +462,6 @@ export default function Forecast() {
           </button>
         </div>
 
-        {/* Single device tab */}
         {activeTab === 'single' && (
           !selectedDevice ? (
             <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
@@ -502,251 +498,189 @@ export default function Forecast() {
           ) : null
         )}
 
-        {/* Spatial tab */}
         {activeTab === 'spatial' && (
-          spatialLoading ? (
-            <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
-              <i className="ph ph-circle-notch" style={{ fontSize: '3rem', color: 'var(--primary-color)', marginBottom: '1rem' }}></i>
-              <p style={{ color: 'var(--text-muted)' }}>Loading spatial forecast...</p>
-            </div>
-          ) : spatialError ? (
-            <div className="card" style={{ textAlign: 'center', padding: '4rem 2rem' }}>
-              <i className="ph ph-warning" style={{ fontSize: '4rem', color: 'var(--danger-color)', marginBottom: '1rem' }}></i>
-              <h2 style={{ marginBottom: '0.5rem' }}>Spatial Forecast Unavailable</h2>
-              <p style={{ color: 'var(--text-muted)' }}>{spatialError}</p>
-            </div>
-          ) : spatialData ? (
-            <div className="card">
-              <div className="card-header" style={{ marginBottom: '1rem' }}>
-                <i className="ph ph-map-trifold"></i>
-                <span>Spatial Forecast — {spatialData.nodes.filter(n => !n.virtual).length} Sensors · LSTM + Kriging</span>
-              </div>
-
-              {/* Controls row */}
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
-                {/* Mode toggle */}
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    className={`btn btn-sm ${spatialMode === 'temperature' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => setSpatialMode('temperature')}
-                  >
-                    <i className="ph ph-thermometer"></i> Temperature
-                  </button>
-                  <button
-                    className={`btn btn-sm ${spatialMode === 'humidity' ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => setSpatialMode('humidity')}
-                  >
-                    <i className="ph ph-drop"></i> Humidity
-                  </button>
+          <div className="card">
+            <div className="card-header" style={{ marginBottom: '1rem', flexDirection: 'column', alignItems: 'stretch' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <i className="ph ph-map-trifold"></i>
+                  <span>Spatial Forecast {spatialData ? `— ${spatialData.nodes.filter(n => !n.virtual).length} Sensors · LSTM + Kriging` : ''}</span>
                 </div>
-
-                {/* Horizon slider */}
-                <div style={{ flex: 1, minWidth: '180px' }}>
-                  <input
-                    type="range"
-                    min={0}
-                    max={spatialHorizons.length - 1}
-                    step={1}
-                    value={spatialHorizonStep}
-                    onChange={e => setSpatialHorizonStep(Number(e.target.value))}
-                    style={{ width: '100%' }}
-                  />
-                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
-                    {spatialHorizons.map(h => (
-                      <span key={h.label} style={{ fontWeight: spatialHorizons[spatialHorizonStep]?.label === h.label ? 700 : 400 }}>
-                        {h.label}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Animate + Refresh */}
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    className={`btn btn-sm ${isAnimating ? 'btn-primary' : 'btn-outline'}`}
-                    onClick={() => setIsAnimating(a => !a)}
-                    title="Timelapse through horizons"
-                  >
-                    <i className={`ph ${isAnimating ? 'ph-pause' : 'ph-play'}`}></i>
-                  </button>
-                  <button
-                    className="btn btn-sm btn-outline"
-                    onClick={() => { setIsAnimating(false); setSpatialRefreshKey(k => k + 1); }}
-                    title="Refresh"
-                  >
-                    <i className={`ph ph-arrows-clockwise${isSpatialRefreshing ? ' spinning' : ''}`}></i>
-                  </button>
-                </div>
-              </div>
-
-              {/* Leaflet map with heatmap overlay */}
-              {/* Outer wrapper: position:relative anchor for tooltips, no overflow clip */}
-              <div style={{
-                position: 'relative',
-                borderRadius: '0.5rem',
-                outline: dataFlash ? '2px solid #38a169' : '2px solid transparent',
-                boxShadow: dataFlash ? '0 0 0 5px rgba(56,161,105,0.22)' : '0 0 0 0px rgba(56,161,105,0)',
-                transition: 'outline 0.25s ease, box-shadow 0.25s ease',
-              }}>
-                {/* Inner wrapper: clips map to rounded corners only */}
-                <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
-                  <MapContainer
-                  center={[20.907676716039095, 105.85334887910626]}
-                  zoom={22}
-                  style={{ height: 420, width: '100%' }}
-                  scrollWheelZoom={true}
+                <select
+                  className="form-control"
+                  style={{ padding: '0.35rem 0.75rem', height: '34px', width: 'auto', fontSize: '0.85rem' }}
+                  value={selectedRoom}
+                  onChange={e => { setSelectedRoom(e.target.value); hasSpatialDataRef.current = false; setSpatialData(null); setSpatialError(null); }}
                 >
-                  <TileLayer
-                    url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-                    maxZoom={25}
-                    maxNativeZoom={19}
-                  />
-
-                  {/* Room boundary rectangle */}
-                  <Rectangle
-                    bounds={[[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]]}
-                    pathOptions={{ color: '#1a202c', weight: 2, fillOpacity: 0 }}
-                  />
-
-                  {/* X/Y Axes Labels */}
-                  {[0, 1, 2, 3, 4, 5, 6, 7].map(m => (
-                    <React.Fragment key={m}>
-                      {/* X Axis (bottom) */}
-                      <Marker
-                        position={[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng + (m/7)*(ROOM_BOUNDS.maxLng - ROOM_BOUNDS.minLng)]}
-                        interactive={false}
-                        icon={L.divIcon({
-                          className: 'axis-label-x',
-                          html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap;">${m}m</div>`,
-                          iconSize: [20, 10],
-                          iconAnchor: [10, -5]
-                        })}
-                      />
-                      {/* Y Axis (left) */}
-                      <Marker
-                        position={[ROOM_BOUNDS.minLat + (m/7)*(ROOM_BOUNDS.maxLat - ROOM_BOUNDS.minLat), ROOM_BOUNDS.minLng]}
-                        interactive={false}
-                        icon={L.divIcon({
-                          className: 'axis-label-y',
-                          html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap; text-align: right; width: 25px;">${m}m</div>`,
-                          iconSize: [25, 10],
-                          iconAnchor: [30, 5]
-                        })}
-                      />
-                    </React.Fragment>
+                  {rooms.length === 0 ? <option value="">No rooms</option> : rooms.map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
                   ))}
+                </select>
+              </div>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <button
+                  className={`btn btn-sm ${spatialMode === 'temperature' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setSpatialMode('temperature')}
+                >
+                  <i className="ph ph-thermometer"></i> Temperature
+                </button>
+                <button
+                  className={`btn btn-sm ${spatialMode === 'humidity' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setSpatialMode('humidity')}
+                >
+                  <i className="ph ph-drop"></i> Humidity
+                </button>
+              </div>
+            </div>
 
-                  {/* Heatmap SVG overlay */}
-                  {spatialData && (() => {
-                    const slice = spatialData.heatmaps[sliceIdx];
-                    if (!slice) return null;
-                    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
-                    const toRgb = spatialMode === 'temperature' ? tempToRgb : humToRgb;
-                    const H = grid.length, W = grid[0].length;
-                    return (
-                      <SVGOverlay
-                        bounds={[[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]]}
-                        attributes={{ opacity: 0.65 }}
-                      >
-                        <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height="100%">
-                          {grid.flatMap((row, r) =>
-                            row.map((val, c) => {
-                              const [rv, g, b] = toRgb(val);
-                              return <rect key={`${r}-${c}`} x={c} y={r} width={1} height={1} fill={`rgb(${rv},${g},${b})`} />;
-                            })
-                          )}
-                        </svg>
-                      </SVGOverlay>
-                    );
-                  })()}
-
-                  {/* Device markers — draggable, with name label + hover tooltip */}
-                  {spatialData?.nodes.filter(n => !n.virtual && n.lat && n.lng).map(node => {
-                    // Get current reading values for hover tooltip (use now-slice or first forecast)
-                    const nowSlice = spatialData.heatmaps.find(hm => hm.horizon_minute === 0);
-                    const nodeTemp = node.current_temperature ?? node.forecast?.[0]?.temperature ?? '—';
-                    const nodeHum  = node.current_humidity  ?? node.forecast?.[0]?.humidity  ?? '—';
-                    return (
-                      <Marker
-                        key={node.device_id}
-                        position={[
-                          pendingPositions[node.device_id]?.lat ?? node.lat,
-                          pendingPositions[node.device_id]?.lng ?? node.lng,
-                        ]}
-                        draggable={true}
-                        icon={makeDeviceIcon(node.name)}
-                        eventHandlers={{
-                          dragend(e) {
-                            // Only state change during the whole drag lifecycle
-                            const { lat, lng } = e.target.getLatLng();
-                            setPendingPositions(prev => ({ ...prev, [node.device_id]: { lat, lng } }));
-                          },
-                          mouseover(e) {
-                            const el = deviceTooltipRef.current;
-                            if (!el) return;
-                            const cp = e.containerPoint;
-                            el.style.left = (cp.x + 14) + 'px';
-                            el.style.top  = (cp.y - 80) + 'px';
-                            el.innerHTML = `
-                              <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${node.name}</div>
-                              <div>🌡️ <span style="color:#c53030">${nodeTemp !== '\u2014' ? nodeTemp + '\u00b0C' : '\u2014'}</span></div>
-                              <div>💧 <span style="color:#2b6cb0">${nodeHum !== '\u2014' ? nodeHum + '%' : '\u2014'}</span></div>
-                            `;
-                            el.style.display = 'block';
-                          },
-                          mousemove(e) {
-                            const el = deviceTooltipRef.current;
-                            if (!el || el.style.display === 'none') return;
-                            const cp = e.containerPoint;
-                            el.style.left = (cp.x + 14) + 'px';
-                            el.style.top  = (cp.y - 80) + 'px';
-                          },
-                          mouseout() {
-                            if (deviceTooltipRef.current) deviceTooltipRef.current.style.display = 'none';
-                          },
-                        }}
-                      >
-                        <Popup>
-                          <div style={{ minWidth: 140 }}>
-                            <strong>{node.name}</strong>
-                            {node.forecast[0] && (
-                              <div style={{ marginTop: 4, fontSize: '0.85rem' }}>
-                                Next: {node.forecast[0].temperature}°C / {node.forecast[0].humidity}%
-                              </div>
-                            )}
-                            {pendingPositions[node.device_id] && (
-                              <button
-                                onClick={() => saveNodePosition(node.device_id)}
-                                style={{ marginTop: 6, padding: '3px 10px', background: 'var(--primary-color)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}
-                              >
-                                Save position
-                              </button>
-                            )}
-                          </div>
-                        </Popup>
-                      </Marker>
-                    );
-                  })}
-                  {/* Tile hover handler — reads latlng, maps to grid cell, no drag interference */}
-                  {spatialData && (() => {
-                    const slice = spatialData.heatmaps[sliceIdx];
-                    if (!slice) return null;
-                    const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
-                    const H = grid.length, W = grid[0].length;
-                    const BOUNDS = [[ROOM_BOUNDS.minLat, ROOM_BOUNDS.minLng], [ROOM_BOUNDS.maxLat, ROOM_BOUNDS.maxLng]];
-                    return (
-                      <MapHoverHandler
-                        grid={grid} W={W} H={H} bounds={BOUNDS}
-                        spatialMode={spatialMode}
-                        tooltipRef={tileTooltipRef}
+            {spatialLoading ? (
+              <div style={{ textAlign: 'center', padding: '4rem 2rem' }}>
+                <i className="ph ph-circle-notch spinning" style={{ fontSize: '3rem', color: 'var(--primary-color)', marginBottom: '1rem' }}></i>
+                <p style={{ color: 'var(--text-muted)' }}>Loading spatial forecast...</p>
+              </div>
+            ) : spatialError ? (
+              <div style={{ position: 'relative', borderRadius: '0.5rem' }}>
+                <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
+                  {roomBounds && (
+                    <MapContainer
+                      center={[(roomBounds.minLat + roomBounds.maxLat) / 2, (roomBounds.minLng + roomBounds.maxLng) / 2]}
+                      zoomSnap={0.5}
+                      wheelPxPerZoomLevel={120}
+                      bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
+                      boundsOptions={{ padding: [30, 30] }}
+                      style={{ height: 420, width: '100%' }}
+                      scrollWheelZoom={true}
+                      zoomControl={false}
+                      attributionControl={false}
+                    >
+                      <TileLayer
+                        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                        attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                        maxZoom={25}
+                        maxNativeZoom={19}
                       />
-                    );
-                  })()}
-                </MapContainer>
-                </div> {/* end inner clip div */}
-
-                {/* Device tooltip — pure DOM, no React state */}
+                      {rooms.map(room => {
+                        const b = calcRoomBounds(room);
+                        if (!b) return null;
+                        const isSelected = room.id === parseInt(selectedRoom);
+                        return (
+                          <React.Fragment key={room.id}>
+                            <Rectangle
+                              bounds={[[b.minLat, b.minLng], [b.maxLat, b.maxLng]]}
+                              pathOptions={{
+                                color: isSelected ? '#1a202c' : '#a0aec0',
+                                weight: isSelected ? 2 : 1,
+                                fillOpacity: 0,
+                                dashArray: isSelected ? '' : '5, 10'
+                              }}
+                            />
+                            <Marker
+                              position={[b.maxLat, (b.minLng + b.maxLng) / 2]}
+                              icon={L.divIcon({
+                                className: 'room-label',
+                                html: `<div style="font-size:14px;font-weight:700;white-space:nowrap;transform:translate(-50%, -100%);color:#1a202c;text-shadow: 1px 1px 0 rgba(255,255,255,0.8), -1px -1px 0 rgba(255,255,255,0.8), 1px -1px 0 rgba(255,255,255,0.8), -1px 1px 0 rgba(255,255,255,0.8);">${room.name}</div>`,
+                                iconSize: [0, 0],
+                                iconAnchor: [0, 0]
+                              })}
+                              interactive={false}
+                            />
+                            {/* X axis for each room */}
+                            {Array.from({ length: Math.ceil(b.width) + 1 }, (_, i) => i).map(m => (
+                              <Marker
+                                key={`err-x-${room.id}-${m}`}
+                                position={[b.minLat, b.minLng + (m / b.width) * (b.maxLng - b.minLng)]}
+                                interactive={false}
+                                icon={L.divIcon({
+                                  className: 'axis-label-x',
+                                  html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap;">${m}m</div>`,
+                                  iconSize: [20, 10],
+                                  iconAnchor: [10, -5]
+                                })}
+                              />
+                            ))}
+                            {/* Y axis for each room */}
+                            {Array.from({ length: Math.ceil(b.length) + 1 }, (_, i) => i).map(m => (
+                              <Marker
+                                key={`err-y-${room.id}-${m}`}
+                                position={[b.minLat + (m / b.length) * (b.maxLat - b.minLat), b.minLng]}
+                                interactive={false}
+                                icon={L.divIcon({
+                                  className: 'axis-label-y',
+                                  html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap; text-align: right; width: 25px;">${m}m</div>`,
+                                  iconSize: [25, 10],
+                                  iconAnchor: [30, 5]
+                                })}
+                              />
+                            ))}
+                            {isSelected && (
+                              <Marker
+                                position={[(b.minLat + b.maxLat) / 2, (b.minLng + b.maxLng) / 2]}
+                                interactive={false}
+                                icon={L.divIcon({
+                                  className: 'error-label',
+                                  html: `<div style="font-size:11px; font-weight:600; color:#e53e3e; white-space:nowrap; text-align:center; display:flex; align-items:center; justify-content:center;"><i class="ph ph-warning" style="margin-right:4px"></i>Not enough devices<br/>to collect data</div>`,
+                                  iconSize: [200, 40],
+                                  iconAnchor: [100, 20]
+                                })}
+                              />
+                            )}
+                          </React.Fragment>
+                        );
+                      })}
+                      {/* Show all devices with coordinates */}
+                      {devices.filter(d => d.lat && d.lng).map(device => {
+                        const room = rooms.find(r => r.id === device.room_id);
+                        const nodeTemp = (device.last_temperature ?? '—').toString();
+                        const nodeHum  = (device.last_humidity ?? '—').toString();
+                        return (
+                          <Marker
+                            key={device.id}
+                            position={[device.lat, device.lng]}
+                            icon={makeDeviceIcon(device.name)}
+                            eventHandlers={{
+                              mouseover(e) {
+                                const el = deviceTooltipRef.current;
+                                if (!el) return;
+                                const cp = e.containerPoint;
+                                el.style.left = (cp.x + 14) + 'px';
+                                el.style.top  = (cp.y - 80) + 'px';
+                                el.innerHTML = `
+                                  <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${device.name}</div>
+                                  <div>🌡️ <span style="color:#c53030">${nodeTemp !== '—' ? nodeTemp + '°C' : '—'}</span></div>
+                                  <div>💧 <span style="color:#2b6cb0">${nodeHum !== '—' ? nodeHum + '%' : '—'}</span></div>
+                                  <div style="font-size:0.7rem;color:#718096;margin-top:2px">Room: ${room ? room.name : 'Unassigned'}</div>
+                                `;
+                                el.style.display = 'block';
+                              },
+                              mousemove(e) {
+                                const el = deviceTooltipRef.current;
+                                if (!el || el.style.display === 'none') return;
+                                const cp = e.containerPoint;
+                                el.style.left = (cp.x + 14) + 'px';
+                                el.style.top  = (cp.y - 80) + 'px';
+                              },
+                              mouseout() {
+                                if (deviceTooltipRef.current) deviceTooltipRef.current.style.display = 'none';
+                              },
+                            }}
+                          >
+                            <Popup>
+                              <div style={{ minWidth: 140 }}>
+                                <strong>{device.name}</strong>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+                                  Room: {room ? room.name : 'Unassigned'}
+                                </div>
+                                <div style={{ fontSize: '0.85rem' }}>
+                                  🌡️ {nodeTemp !== '—' ? nodeTemp + '°C' : '—'} / 💧 {nodeHum !== '—' ? nodeHum + '%' : '—'}
+                                </div>
+                              </div>
+                            </Popup>
+                          </Marker>
+                        );
+                      })}
+                    </MapContainer>
+                  )}
+                </div>
                 <div ref={deviceTooltipRef} style={{
                   display: 'none', position: 'absolute',
                   background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
@@ -754,62 +688,309 @@ export default function Forecast() {
                   lineHeight: 1.6, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
                   pointerEvents: 'none', zIndex: 9999, whiteSpace: 'nowrap',
                 }} />
-
-                {/* Tile tooltip — pure DOM, no React state */}
-                <div ref={tileTooltipRef} style={{
-                  display: 'none', position: 'absolute',
-                  background: 'rgba(26,32,44,0.9)', color: '#fc8181',
-                  padding: '4px 9px', borderRadius: '5px', fontSize: '0.78rem',
-                  fontFamily: "'Inter',sans-serif", pointerEvents: 'none',
-                  zIndex: 9998, boxShadow: '0 2px 8px rgba(0,0,0,0.25)', whiteSpace: 'nowrap',
-                }} />
-              </div> {/* end outer positioning wrapper */}
-
-              {/* Color legend */}
-              <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                {spatialMode === 'temperature' ? (
-                  <>
-                    <span>15°C</span>
-                    <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #1e64ff, #32c832, #e64632)' }} />
-                    <span>40°C</span>
-                  </>
-                ) : (
-                  <>
-                    <span>0%</span>
-                    <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #f0a032, #1e64dc)' }} />
-                    <span>100%</span>
-                  </>
-                )}
               </div>
+            ) : spatialData ? (
+              <>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
+                  <div style={{ flex: 1, minWidth: '180px' }}>
+                    <input
+                      type="range"
+                      min={0}
+                      max={spatialHorizons.length - 1}
+                      step={1}
+                      value={spatialHorizonStep}
+                      onChange={e => setSpatialHorizonStep(Number(e.target.value))}
+                      style={{ width: '100%' }}
+                    />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                      {spatialHorizons.map(h => (
+                        <span key={h.label} style={{ fontWeight: spatialHorizons[spatialHorizonStep]?.label === h.label ? 700 : 400 }}>
+                          {h.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
 
-              {/* Toast notification */}
-              {toast && (
-                <div style={{
-                  position: 'fixed',
-                  bottom: '2rem',
-                  left: '50%',
-                  transform: 'translateX(-50%)',
-                  background: 'linear-gradient(135deg, #38a169, #276749)',
-                  color: '#fff',
-                  padding: '0.75rem 1.5rem',
-                  borderRadius: '10px',
-                  fontFamily: "'Inter',sans-serif",
-                  fontWeight: 600,
-                  fontSize: '0.9rem',
-                  boxShadow: '0 8px 30px rgba(56,161,105,0.45)',
-                  zIndex: 99999,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  animation: 'fadeInUp 0.3s ease',
-                }}>
-                  <span style={{ fontSize: '1.1rem' }}>✅</span> {toast.message}
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      className={`btn btn-sm ${isAnimating ? 'btn-primary' : 'btn-outline'}`}
+                      onClick={() => setIsAnimating(a => !a)}
+                      title="Timelapse through horizons"
+                    >
+                      <i className={`ph ${isAnimating ? 'ph-pause' : 'ph-play'}`}></i>
+                    </button>
+                    <button
+                      className="btn btn-sm btn-outline"
+                      onClick={() => { setIsAnimating(false); setSpatialRefreshKey(k => k + 1); }}
+                      title="Refresh"
+                    >
+                      <i className={`ph ph-arrows-clockwise${isSpatialRefreshing ? ' spinning' : ''}`}></i>
+                    </button>
+                  </div>
                 </div>
-              )}
-            </div>
-          ) : null
+
+                <div style={{
+                  position: 'relative',
+                  borderRadius: '0.5rem',
+                  outline: dataFlash ? '2px solid #38a169' : '2px solid transparent',
+                  boxShadow: dataFlash ? '0 0 0 5px rgba(56,161,105,0.22)' : '0 0 0 0px rgba(56,161,105,0)',
+                  transition: 'outline 0.25s ease, box-shadow 0.25s ease',
+                }}>
+                  <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
+                    {roomBounds && (
+                      <MapContainer
+                        center={[(roomBounds.minLat + roomBounds.maxLat) / 2, (roomBounds.minLng + roomBounds.maxLng) / 2]}
+                        zoomSnap={0.5}
+                        wheelPxPerZoomLevel={120}
+                        bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
+                        boundsOptions={{ padding: [30, 30] }}
+                        style={{ height: 420, width: '100%' }}
+                        scrollWheelZoom={true}
+                        zoomControl={false}
+                        attributionControl={false}
+                      >
+                        <TileLayer
+                          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                          maxZoom={25}
+                          maxNativeZoom={19}
+                        />
+
+                        {rooms.map(room => {
+                          const b = calcRoomBounds(room);
+                          if (!b) return null;
+                          const isSelected = room.id === parseInt(selectedRoom);
+                          return (
+                            <React.Fragment key={room.id}>
+                              <Rectangle
+                                bounds={[[b.minLat, b.minLng], [b.maxLat, b.maxLng]]}
+                                pathOptions={{
+                                  color: isSelected ? '#1a202c' : '#a0aec0',
+                                  weight: isSelected ? 2 : 1,
+                                  fillOpacity: 0,
+                                  dashArray: isSelected ? '' : '5, 10'
+                                }}
+                              />
+                              <Marker 
+                                position={[b.maxLat, (b.minLng + b.maxLng) / 2]} 
+                                icon={L.divIcon({
+                                  className: 'room-label',
+                                  html: `<div style="font-size:14px;font-weight:700;white-space:nowrap;transform:translate(-50%, -100%);color:#1a202c;text-shadow: 1px 1px 0 rgba(255,255,255,0.8), -1px -1px 0 rgba(255,255,255,0.8), 1px -1px 0 rgba(255,255,255,0.8), -1px 1px 0 rgba(255,255,255,0.8);">${room.name}</div>`,
+                                  iconSize: [0, 0],
+                                  iconAnchor: [0, 0]
+                                })}
+                                interactive={false}
+                              />
+                              {/* X axis for each room */}
+                              {Array.from({ length: Math.ceil(b.width) + 1 }, (_, i) => i).map(m => (
+                                <Marker
+                                  key={`x-${room.id}-${m}`}
+                                  position={[b.minLat, b.minLng + (m / b.width) * (b.maxLng - b.minLng)]}
+                                  interactive={false}
+                                  icon={L.divIcon({
+                                    className: 'axis-label-x',
+                                    html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap;">${m}m</div>`,
+                                    iconSize: [20, 10],
+                                    iconAnchor: [10, -5]
+                                  })}
+                                />
+                              ))}
+                              {/* Y axis for each room */}
+                              {Array.from({ length: Math.ceil(b.length) + 1 }, (_, i) => i).map(m => (
+                                <Marker
+                                  key={`y-${room.id}-${m}`}
+                                  position={[b.minLat + (m / b.length) * (b.maxLat - b.minLat), b.minLng]}
+                                  interactive={false}
+                                  icon={L.divIcon({
+                                    className: 'axis-label-y',
+                                    html: `<div style="color: #718096; font-size: 10px; font-weight: 700; white-space: nowrap; text-align: right; width: 25px;">${m}m</div>`,
+                                    iconSize: [25, 10],
+                                    iconAnchor: [30, 5]
+                                  })}
+                                />
+                              ))}
+                            </React.Fragment>
+                          );
+                        })}
+
+                        {spatialData && (() => {
+                          const slice = spatialData.heatmaps[sliceIdx];
+                          if (!slice) return null;
+                          const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
+                          const toRgb = spatialMode === 'temperature' ? tempToRgb : humToRgb;
+                          const H = grid.length, W = grid[0].length;
+                          return (
+                            <SVGOverlay
+                              bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
+                              attributes={{ opacity: 0.65 }}
+                            >
+                              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" width="100%" height="100%">
+                                {grid.flatMap((row, r) =>
+                                  row.map((val, c) => {
+                                    const [rv, g, b] = toRgb(val);
+                                    return <rect key={`${r}-${c}`} x={c} y={r} width={1} height={1} fill={`rgb(${rv},${g},${b})`} />;
+                                  })
+                                )}
+                              </svg>
+                            </SVGOverlay>
+                          );
+                        })()}
+
+                        {devices.filter(d => d.lat && d.lng).map(device => {
+                          const room = rooms.find(r => r.id === device.room_id);
+                          const b = calcRoomBounds(room);
+                          const sNode = spatialData?.nodes.find(n => n.device_id === device.id);
+                          const nodeTemp = (sNode?.current_temperature ?? device.last_temperature ?? '—').toString();
+                          const nodeHum  = (sNode?.current_humidity ?? device.last_humidity ?? '—').toString();
+
+                          return (
+                            <Marker
+                              key={device.id}
+                              position={[
+                                pendingPositions[device.id]?.lat ?? device.lat,
+                                pendingPositions[device.id]?.lng ?? device.lng,
+                              ]}
+                              draggable={true}
+                              icon={makeDeviceIcon(device.name)}
+                              eventHandlers={{
+                                dragend(e) {
+                                  let { lat, lng } = e.target.getLatLng();
+                                  if (b) {
+                                    lat = Math.max(b.minLat, Math.min(b.maxLat, lat));
+                                    lng = Math.max(b.minLng, Math.min(b.maxLng, lng));
+                                  }
+                                  e.target.setLatLng([lat, lng]);
+                                  setPendingPositions(prev => ({ ...prev, [device.id]: { lat, lng } }));
+                                },
+                                mouseover(e) {
+                                  const el = deviceTooltipRef.current;
+                                  if (!el) return;
+                                  const cp = e.containerPoint;
+                                  el.style.left = (cp.x + 14) + 'px';
+                                  el.style.top  = (cp.y - 80) + 'px';
+                                  el.innerHTML = `
+                                    <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${device.name}</div>
+                                    <div>🌡️ <span style="color:#c53030">${nodeTemp !== '—' ? nodeTemp + '°C' : '—'}</span></div>
+                                    <div>💧 <span style="color:#2b6cb0">${nodeHum !== '—' ? nodeHum + '%' : '—'}</span></div>
+                                  `;
+                                  el.style.display = 'block';
+                                },
+                                mousemove(e) {
+                                  const el = deviceTooltipRef.current;
+                                  if (!el || el.style.display === 'none') return;
+                                  const cp = e.containerPoint;
+                                  el.style.left = (cp.x + 14) + 'px';
+                                  el.style.top  = (cp.y - 80) + 'px';
+                                },
+                                mouseout() {
+                                  if (deviceTooltipRef.current) deviceTooltipRef.current.style.display = 'none';
+                                },
+                              }}
+                            >
+                              <Popup>
+                                <div style={{ minWidth: 140 }}>
+                                  <strong>{device.name}</strong>
+                                  <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: 4 }}>
+                                    Room: {room ? room.name : 'Unassigned'}
+                                  </div>
+                                  {sNode?.forecast?.[0] && (
+                                    <div style={{ marginTop: 4, fontSize: '0.85rem' }}>
+                                      Next: {sNode.forecast[0].temperature}°C / {sNode.forecast[0].humidity}%
+                                    </div>
+                                  )}
+                                  {pendingPositions[device.id] && (
+                                    <button
+                                      onClick={() => saveNodePosition(device.id)}
+                                      style={{ marginTop: 6, padding: '3px 10px', background: 'var(--primary-color)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}
+                                    >
+                                      Save position
+                                    </button>
+                                  )}
+                                </div>
+                              </Popup>
+                            </Marker>
+                          );
+                        })}
+
+                        {spatialData && (() => {
+                          const slice = spatialData.heatmaps[sliceIdx];
+                          if (!slice) return null;
+                          const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
+                          const H = grid.length, W = grid[0].length;
+                          const BOUNDS = [[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]];
+                          return (
+                            <MapHoverHandler
+                              grid={grid} W={W} H={H} bounds={BOUNDS}
+                              spatialMode={spatialMode}
+                              tooltipRef={tileTooltipRef}
+                            />
+                          );
+                        })()}
+                      </MapContainer>
+                    )}
+                  </div>
+
+                  <div ref={deviceTooltipRef} style={{
+                    display: 'none', position: 'absolute',
+                    background: 'white', border: '1px solid #e2e8f0', borderRadius: '8px',
+                    padding: '7px 12px', fontSize: '0.82rem', fontFamily: "'Inter',sans-serif",
+                    lineHeight: 1.6, boxShadow: '0 4px 16px rgba(0,0,0,0.15)',
+                    pointerEvents: 'none', zIndex: 9999, whiteSpace: 'nowrap',
+                  }} />
+
+                  <div ref={tileTooltipRef} style={{
+                    display: 'none', position: 'absolute',
+                    background: 'rgba(26,32,44,0.9)', color: '#fc8181',
+                    padding: '4px 9px', borderRadius: '5px', fontSize: '0.78rem',
+                    fontFamily: "'Inter',sans-serif", pointerEvents: 'none',
+                    zIndex: 9998, boxShadow: '0 2px 8px rgba(0,0,0,0.25)', whiteSpace: 'nowrap',
+                  }} />
+                </div>
+
+                <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {spatialMode === 'temperature' ? (
+                    <>
+                      <span>15°C</span>
+                      <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #1e64ff, #32c832, #e64632)' }} />
+                      <span>40°C</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>0%</span>
+                      <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #f0a032, #1e64dc)' }} />
+                      <span>100%</span>
+                    </>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
         )}
       </div>
+
+      {toast && (
+        <div style={{
+          position: 'fixed',
+          bottom: '2rem',
+          left: '50%',
+          transform: 'translateX(-50%)',
+          background: 'linear-gradient(135deg, #38a169, #276749)',
+          color: '#fff',
+          padding: '0.75rem 1.5rem',
+          borderRadius: '10px',
+          fontFamily: "'Inter',sans-serif",
+          fontWeight: 600,
+          fontSize: '0.9rem',
+          boxShadow: '0 8px 30px rgba(56,161,105,0.45)',
+          zIndex: 99999,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.5rem',
+          animation: 'fadeInUp 0.3s ease',
+        }}>
+          <span style={{ fontSize: '1.1rem' }}>✅</span> {toast.message}
+        </div>
+      )}
     </>
   );
 }
