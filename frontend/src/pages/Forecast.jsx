@@ -627,17 +627,33 @@ export default function Forecast() {
                           </React.Fragment>
                         );
                       })}
-                      {/* Show all devices with coordinates */}
+                      {/* Show all devices with coordinates — draggable so user can reposition even without heatmap */}
                       {devices.filter(d => d.lat && d.lng).map(device => {
                         const room = rooms.find(r => r.id === device.room_id);
+                        const b = calcRoomBounds(room);
                         const nodeTemp = (device.last_temperature ?? '—').toString();
                         const nodeHum  = (device.last_humidity ?? '—').toString();
                         return (
                           <Marker
                             key={device.id}
-                            position={[device.lat, device.lng]}
+                            position={[
+                              pendingPositions[device.id]?.lat ?? device.lat,
+                              pendingPositions[device.id]?.lng ?? device.lng,
+                            ]}
+                            draggable={true}
                             icon={makeDeviceIcon(device.name)}
                             eventHandlers={{
+                              dragend(e) {
+                                let { lat, lng } = e.target.getLatLng();
+                                if (b) {
+                                  lat = Math.max(b.minLat, Math.min(b.maxLat, lat));
+                                  lng = Math.max(b.minLng, Math.min(b.maxLng, lng));
+                                }
+                                e.target.setLatLng([lat, lng]);
+                                setPendingPositions(prev => ({ ...prev, [device.id]: { lat, lng } }));
+                                // Immediately open popup so "Save position" button is visible on mouse release
+                                e.target.openPopup();
+                              },
                               mouseover(e) {
                                 const el = deviceTooltipRef.current;
                                 if (!el) return;
@@ -673,6 +689,14 @@ export default function Forecast() {
                                 <div style={{ fontSize: '0.85rem' }}>
                                   🌡️ {nodeTemp !== '—' ? nodeTemp + '°C' : '—'} / 💧 {nodeHum !== '—' ? nodeHum + '%' : '—'}
                                 </div>
+                                {pendingPositions[device.id] && (
+                                  <button
+                                    onClick={() => saveNodePosition(device.id)}
+                                    style={{ marginTop: 6, padding: '3px 10px', background: 'var(--primary-color)', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}
+                                  >
+                                    Save position
+                                  </button>
+                                )}
                               </div>
                             </Popup>
                           </Marker>
@@ -861,6 +885,8 @@ export default function Forecast() {
                                   }
                                   e.target.setLatLng([lat, lng]);
                                   setPendingPositions(prev => ({ ...prev, [device.id]: { lat, lng } }));
+                                  // Immediately open popup so "Save position" button is visible on mouse release
+                                  e.target.openPopup();
                                 },
                                 mouseover(e) {
                                   const el = deviceTooltipRef.current;

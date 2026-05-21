@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useConnection } from '../context/ConnectionContext';
 import AccountDropdown from './AccountDropdown';
@@ -79,7 +79,11 @@ const Layout = () => {
                         <button className="menu-toggle" id="menu-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
                             <i className="ph ph-list"></i>
                         </button>
-                        {showStatus && (
+                        {location.pathname === '/device' ? (
+                            <Link to="/devices" className="btn btn-outline" style={{ padding: '0.35rem 0.75rem', background: 'white' }}>
+                                <i className="ph ph-arrow-left"></i> <span>Back</span>
+                            </Link>
+                        ) : showStatus && (
                             <div className="status-indicator">
                                 <span className={`status-dot ${dotClass}`}></span>
                                 <span style={{ color: textColor, transition: 'color 0.3s ease' }}>{label}</span>

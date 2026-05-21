@@ -147,9 +147,9 @@ export default function Rooms() {
                                 </div>
                             </div>
 
-                            <div style={{ display: 'flex', gap: '0.5rem', marginTop: 'auto', borderTop: '1px solid #edf2f7', paddingTop: '1rem' }}>
-                                <button className="btn btn-outline" style={{ flex: 1, padding: '0.4rem' }} onClick={() => openEditModal(r)}><i className="ph ph-pencil-simple"></i> Edit</button>
-                                <button className="btn btn-danger" style={{ padding: '0.4rem' }} onClick={() => deleteRoom(r.id)} title="Delete Room"><i className="ph ph-trash"></i></button>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 'auto', borderTop: '1px solid #edf2f7', paddingTop: '1rem' }}>
+                                <button className="btn btn-outline" style={{ padding: '0.4rem 0.75rem' }} onClick={() => openEditModal(r)}><i className="ph ph-pencil-simple"></i>Edit</button>
+                                <button className="btn btn-danger" style={{ padding: '0.4rem 0.75rem' }} onClick={() => deleteRoom(r.id)} title="Delete Room"><i className="ph ph-trash"></i></button>
                             </div>
                         </div>
                     ))}

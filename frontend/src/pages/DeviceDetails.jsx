@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useConnection } from '../context/ConnectionContext';
 import { io } from 'socket.io-client';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { Line } from 'react-chartjs-2';
 
 const MAX_CHART_POINTS = 30;
@@ -197,11 +197,6 @@ export default function DeviceDetails() {
 
     return (
         <>
-            <div style={{ position: 'fixed', top: '15px', left: '100px', zIndex: 100 }}>
-                <Link to="/devices" className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', background: 'white' }}>
-                    <i className="ph ph-arrow-left"></i> <span>Back</span>
-                </Link>
-            </div>
 
             {loading ? (
                 <div id="loading" style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-muted)' }}>{loading}</div>

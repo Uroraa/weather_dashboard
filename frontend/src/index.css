@@ -264,6 +264,7 @@ body {
     padding: 0.6rem 1.2rem;
     border-radius: 0.5rem;
     border: none;
+    font-family: inherit;
     font-weight: 600;
     cursor: pointer;
     transition: var(--transition);

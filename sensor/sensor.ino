@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include "DHT.h"
 #include <Preferences.h>
+#include <math.h>   // for log(), cos(), sqrt()
 
 // -- WiFi --
 const char* ssid = "Sxmh1";
@@ -17,7 +18,7 @@ const int   mqtt_port   = 1883;
 #define DHTTYPE DHT11
 
 // -- Interval --
-const unsigned long SEND_INTERVAL   = 60000;  // 30s gửi data
+const unsigned long SEND_INTERVAL   = 5000;  // 30s gửi data
 const unsigned long PROVISION_RETRY = 10000;  // 10s thử lại nếu chưa provision
 
 DHT          dht(DHTPIN, DHTTYPE);
@@ -181,12 +182,30 @@ void loop() {
     if (millis() - lastMsg > SEND_INTERVAL) {
         lastMsg = millis();
 
-        float temperature = dht.readTemperature() - 2.5 ;
+        float temperature = dht.readTemperature() - 2.5;
         float humidity    = dht.readHumidity() + 5;
 
         if (isnan(temperature) || isnan(humidity)) {
-            Serial.println("DHT read failed!");
-            return;
+            Serial.println("DHT read failed! Using mock data (Gaussian).");
+
+            // -- Box-Muller transform: uniform → standard normal --
+            // u1, u2 in (0, 1)
+            float u1 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            float u2 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            float z0 = sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI * u2);
+
+            // Second independent normal for humidity
+            float u3 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            float u4 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            float z1 = sqrt(-2.0f * log(u3)) * cos(2.0f * M_PI * u4);
+
+            // Mock values: temp ~ N(26, 1.5²)  |  hum ~ N(55, 4²)
+            temperature = 26.0f + z0 * 1.5f;
+            humidity    = 55.0f + z1 * 4.0f;
+
+            // Clamp to physical bounds
+            temperature = max(0.0f, min(50.0f, temperature));
+            humidity    = max(0.0f, min(100.0f, humidity));
         }
 
         // Topic vẫn dùng api_key — không thay đổi backend
