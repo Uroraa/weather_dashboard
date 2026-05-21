@@ -9,7 +9,7 @@ const char* ssid = "Sxmh1";
 const char* password = "123456789@";
 
 // -- MQTT --
-const char* mqtt_server = "192.168.2.95";
+const char* mqtt_server = "192.168.2.76";
 const int   mqtt_port   = 1883;
 
 // -- DHT --
@@ -17,7 +17,7 @@ const int   mqtt_port   = 1883;
 #define DHTTYPE DHT11
 
 // -- Interval --
-const unsigned long SEND_INTERVAL   = 5000;  // 30s gửi data
+const unsigned long SEND_INTERVAL   = 60000;  // 30s gửi data
 const unsigned long PROVISION_RETRY = 10000;  // 10s thử lại nếu chưa provision
 
 DHT          dht(DHTPIN, DHTTYPE);
@@ -181,8 +181,8 @@ void loop() {
     if (millis() - lastMsg > SEND_INTERVAL) {
         lastMsg = millis();
 
-        float temperature = dht.readTemperature();
-        float humidity    = dht.readHumidity();
+        float temperature = dht.readTemperature() - 2.5 ;
+        float humidity    = dht.readHumidity() + 5;
 
         if (isnan(temperature) || isnan(humidity)) {
             Serial.println("DHT read failed!");

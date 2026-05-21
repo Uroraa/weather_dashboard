@@ -67,6 +67,28 @@ export default function DeviceDetails() {
                     setTemperature(latest.temperature);
                     setHumidity(latest.humidity);
                 }
+
+                const loginTime = localStorage.getItem('loginTime');
+                let chartReadings = data;
+                if (loginTime) {
+                    const parsedLoginTime = parseInt(loginTime, 10);
+                    chartReadings = data.filter(r => new Date(r.timestamp).getTime() >= parsedLoginTime);
+                }
+
+                if (chartReadings.length > 0) {
+                    const padLen = Math.max(0, MAX_CHART_POINTS - chartReadings.length);
+                    const labels = [...Array(padLen).fill(''), ...chartReadings.map(r => new Date(r.timestamp).toLocaleTimeString())].slice(-MAX_CHART_POINTS);
+                    const temps = [...Array(padLen).fill(null), ...chartReadings.map(r => r.temperature)].slice(-MAX_CHART_POINTS);
+                    const hums = [...Array(padLen).fill(null), ...chartReadings.map(r => r.humidity)].slice(-MAX_CHART_POINTS);
+
+                    setLiveChartData({
+                        labels,
+                        datasets: [
+                            { label: 'Temp', data: temps, borderColor: '#e53e3e', yAxisID: 'y', tension: 0.4 },
+                            { label: 'Hum', data: hums, borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 }
+                        ]
+                    });
+                }
             }
         } catch (e) { console.error(e); }
     };
@@ -175,7 +197,7 @@ export default function DeviceDetails() {
 
     return (
         <>
-            <div style={{ position: 'absolute', top: '15px', right: '120px', zIndex: 100 }}>
+            <div style={{ position: 'fixed', top: '15px', left: '100px', zIndex: 100 }}>
                 <Link to="/devices" className="btn btn-outline" style={{ padding: '0.4rem 0.8rem', background: 'white' }}>
                     <i className="ph ph-arrow-left"></i> <span>Back</span>
                 </Link>

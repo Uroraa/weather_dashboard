@@ -17,19 +17,19 @@ SHORT_HORIZON = 15
 SHORT_HIDDEN  = 64
 
 # Long model config (hour-level)
-LONG_WINDOW   = 48
-LONG_HORIZON  = 24
-LONG_HIDDEN   = 128
+# LONG_WINDOW   = 48
+# LONG_HORIZON  = 24
+# LONG_HIDDEN   = 128
 
 HORIZON_OPTIONS = {
     "6min":  {"steps": 6,  "model": "short"},
     "10min": {"steps": 10, "model": "short"},
     "15min": {"steps": 15, "model": "short"},
-    "1h":    {"steps": 1,  "model": "long"},
-    "3h":    {"steps": 3,  "model": "long"},
-    "6h":    {"steps": 6,  "model": "long"},
-    "12h":   {"steps": 12, "model": "long"},
-    "24h":   {"steps": 24, "model": "long"},
+    # "1h":    {"steps": 1,  "model": "long"},
+    # "3h":    {"steps": 3,  "model": "long"},
+    # "6h":    {"steps": 6,  "model": "long"},
+    # "12h":   {"steps": 12, "model": "long"},
+    # "24h":   {"steps": 24, "model": "long"},
 }
 
 DB_CONFIG = {
@@ -77,18 +77,23 @@ model_short.eval()
 scaler_short = joblib.load("scaler.pkl")
 print("Short-horizon model loaded (lstm_model.pth).")
 
-try:
-    model_long = LSTMModel(horizon=LONG_HORIZON, hidden_size=LONG_HIDDEN)
-    model_long.load_state_dict(torch.load("lstm_model_long.pth", map_location="cpu"))
-    model_long.eval()
-    scaler_long = joblib.load("scaler_long.pkl")
-    long_model_ready = True
-    print("Long-horizon model loaded (lstm_model_long.pth).")
-except FileNotFoundError:
-    model_long       = None
-    scaler_long      = None
-    long_model_ready = False
-    print("Long-horizon model not found — run lstm_train_long.py to train it.")
+# try:
+#     model_long = LSTMModel(horizon=LONG_HORIZON, hidden_size=LONG_HIDDEN)
+#     model_long.load_state_dict(torch.load("lstm_model_long.pth", map_location="cpu"))
+#     model_long.eval()
+#     scaler_long = joblib.load("scaler_long.pkl")
+#     long_model_ready = True
+#     print("Long-horizon model loaded (lstm_model_long.pth).")
+# except FileNotFoundError:
+#     model_long       = None
+#     scaler_long      = None
+#     long_model_ready = False
+#     print("Long-horizon model not found — run lstm_train_long.py to train it.")
+
+# Long model disabled - using short model only
+model_long = None
+scaler_long = None
+long_model_ready = False
 
 
 # ============================================================

@@ -548,7 +548,7 @@ export default function Forecast() {
                       wheelPxPerZoomLevel={120}
                       bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
                       boundsOptions={{ padding: [30, 30] }}
-                      style={{ height: 420, width: '100%' }}
+                      style={{ height: 550, width: '100%' }}
                       scrollWheelZoom={true}
                       zoomControl={false}
                       attributionControl={false}
@@ -744,7 +744,7 @@ export default function Forecast() {
                         wheelPxPerZoomLevel={120}
                         bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
                         boundsOptions={{ padding: [30, 30] }}
-                        style={{ height: 420, width: '100%' }}
+                        style={{ height: 550, width: '100%' }}
                         scrollWheelZoom={true}
                         zoomControl={false}
                         attributionControl={false}

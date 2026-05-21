@@ -117,11 +117,20 @@ export function ConnectionProvider({ children }) {
         apiFetch(`/api/devices/${selectedDevice}/readings?limit=${MAX_DATA_POINTS}`)
             .then(r => r.ok ? r.json() : null)
             .then(readings => {
-                if (!readings || readings.length === 0) return;
-                const padLen = MAX_DATA_POINTS - readings.length;
-                const labels = [...Array(padLen).fill(''), ...readings.map(r => new Date(r.timestamp).toLocaleTimeString())];
-                const temps  = [...Array(padLen).fill(null),  ...readings.map(r => r.temperature)];
-                const hums   = [...Array(padLen).fill(null),  ...readings.map(r => r.humidity)];
+                if (!readings) return;
+                
+                const loginTime = localStorage.getItem('loginTime');
+                if (loginTime) {
+                    const parsedLoginTime = parseInt(loginTime, 10);
+                    readings = readings.filter(r => new Date(r.timestamp).getTime() >= parsedLoginTime);
+                }
+
+                if (readings.length === 0) return;
+
+                const padLen = Math.max(0, MAX_DATA_POINTS - readings.length);
+                const labels = [...Array(padLen).fill(''), ...readings.map(r => new Date(r.timestamp).toLocaleTimeString())].slice(-MAX_DATA_POINTS);
+                const temps  = [...Array(padLen).fill(null),  ...readings.map(r => r.temperature)].slice(-MAX_DATA_POINTS);
+                const hums   = [...Array(padLen).fill(null),  ...readings.map(r => r.humidity)].slice(-MAX_DATA_POINTS);
                 setChartData(prev => ({
                     ...prev,
                     labels,

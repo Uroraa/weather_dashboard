@@ -21,6 +21,7 @@ export const AuthProvider = ({ children }) => {
   const login = (newToken, newUser) => {
     localStorage.setItem('accessToken', newToken);
     localStorage.setItem('user', JSON.stringify(newUser));
+    localStorage.setItem('loginTime', Date.now().toString());
     setToken(newToken);
     setUser(newUser);
     setIsAuthenticated(true);
@@ -29,6 +30,7 @@ export const AuthProvider = ({ children }) => {
   const logout = () => {
     localStorage.removeItem('accessToken');
     localStorage.removeItem('user');
+    localStorage.removeItem('loginTime');
     setToken(null);
     setUser(null);
     setIsAuthenticated(false);

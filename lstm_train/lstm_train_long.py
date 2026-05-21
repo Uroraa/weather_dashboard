@@ -1,24 +1,31 @@
-import pandas as pd
+import math
+
+import joblib
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 import psycopg2
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-import matplotlib.pyplot as plt
-import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, Dataset
 
 DEVICE_ID    = 12
 WINDOW_SIZE  = 48   # 48 hours of input context
 HORIZON      = 24   # predict up to 24 hours ahead
-INPUT_SIZE   = 2
+INPUT_SIZE   = 6    # temperature, humidity, hour_sin, hour_cos, dow_sin, dow_cos
 HIDDEN_SIZE  = 128
 NUM_LAYERS   = 2
 BATCH_SIZE   = 32
 EPOCHS       = 150
 PATIENCE     = 15
 LR           = 1e-3
+
+FEATURE_COLS    = ["temperature", "humidity", "hour_sin", "hour_cos", "dow_sin", "dow_cos"]
+
+# Đặt True sau khi đã chạy generate_mock_data.py
+USE_AUGMENTED   = False
 
 DB_CONFIG = {
     "host":     "localhost",
@@ -29,24 +36,50 @@ DB_CONFIG = {
 
 
 def load_data():
-    conn = psycopg2.connect(**DB_CONFIG)
-    query = f"""
-        SELECT
-            date_trunc('hour', timestamp) AS ts,
-            AVG(temperature) AS temperature,
-            AVG(humidity)    AS humidity
-        FROM readings
-        WHERE device_id = {DEVICE_ID}
-        GROUP BY date_trunc('hour', timestamp)
-        ORDER BY ts ASC;
-    """
+    conn  = psycopg2.connect(**DB_CONFIG)
+
+    if USE_AUGMENTED:
+        # Đọc từ bảng augmented (mock + thật), cột ts đã là hourly
+        query = f"""
+            SELECT ts, temperature, humidity
+            FROM readings_augmented
+            WHERE device_id = {DEVICE_ID}
+            ORDER BY ts ASC;
+        """
+        print("Nguồn dữ liệu: readings_augmented (mock + thật)")
+    else:
+        # Đọc từ bảng gốc
+        query = f"""
+            SELECT
+                date_trunc('hour', timestamp) AS ts,
+                AVG(temperature) AS temperature,
+                AVG(humidity)    AS humidity
+            FROM readings
+            WHERE device_id = {DEVICE_ID}
+            GROUP BY date_trunc('hour', timestamp)
+            ORDER BY ts ASC;
+        """
+        print("Nguồn dữ liệu: readings (thật)")
+
     df = pd.read_sql(query, conn, parse_dates=["ts"])
     conn.close()
 
     df.set_index("ts", inplace=True)
     df.dropna(inplace=True)
-    print(f"Hourly samples from device {DEVICE_ID}: {len(df)}")
+    print(f"Hourly samples from device {DEVICE_ID}: {len(df)} ({len(df) // 24} ngày)")
     print(df.head())
+    return df
+
+
+def add_time_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Thêm sin/cos encoding cho giờ trong ngày và ngày trong tuần."""
+    hour = df.index.hour
+    dow  = df.index.dayofweek  # 0=Monday … 6=Sunday
+    df = df.copy()
+    df["hour_sin"] = np.sin(2 * math.pi * hour / 24)
+    df["hour_cos"] = np.cos(2 * math.pi * hour / 24)
+    df["dow_sin"]  = np.sin(2 * math.pi * dow  / 7)
+    df["dow_cos"]  = np.cos(2 * math.pi * dow  / 7)
     return df
 
 
@@ -54,16 +87,19 @@ def create_sequences(data, window_size, horizon):
     X, y = [], []
     for i in range(len(data) - window_size - horizon + 1):
         X.append(data[i : i + window_size])
-        y.append(data[i + window_size : i + window_size + horizon])
+        # y chỉ lấy 2 cột đầu (temperature, humidity)
+        y.append(data[i + window_size : i + window_size + horizon, :2])
     return np.array(X), np.array(y)
 
 
 def preprocess(df):
+    df = add_time_features(df)
+
     scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(df[["temperature", "humidity"]])
+    scaled = scaler.fit_transform(df[FEATURE_COLS])
 
     X, y = create_sequences(scaled, WINDOW_SIZE, HORIZON)
-    print(f"X shape: {X.shape}")   # (samples, 48, 2)
+    print(f"X shape: {X.shape}")   # (samples, 48, 6)
     print(f"y shape: {y.shape}")   # (samples, 24, 2)
 
     X_train, X_test, y_train, y_test = train_test_split(
@@ -88,18 +124,19 @@ class LSTMModelLong(nn.Module):
     def __init__(self):
         super().__init__()
         self.lstm = nn.LSTM(
-            input_size  = INPUT_SIZE,
+            input_size  = INPUT_SIZE,   # 6
             hidden_size = HIDDEN_SIZE,
             num_layers  = NUM_LAYERS,
             batch_first = True,
             dropout     = 0.3,
         )
-        self.fc = nn.Linear(HIDDEN_SIZE, HORIZON * INPUT_SIZE)
+        # Output chỉ temperature + humidity (không dự báo time features)
+        self.fc = nn.Linear(HIDDEN_SIZE, HORIZON * 2)
 
     def forward(self, x):
         out, _ = self.lstm(x)
         out = self.fc(out[:, -1, :])
-        return out.view(-1, HORIZON, INPUT_SIZE)
+        return out.view(-1, HORIZON, 2)
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
