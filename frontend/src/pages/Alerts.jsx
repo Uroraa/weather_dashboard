@@ -55,9 +55,9 @@ export default function Alerts() {
 
     return (
         <div className="card" id="alerts-container" style={{ padding: 0, marginTop: '2rem' }}>
-            <div style={{ padding: '1.5rem', borderBottom: '1px solid #edf2f7', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div className="alerts-card-header">
                 <h3 style={{ margin: 0 }}><i className="ph ph-warning-circle"></i> Recent Alerts</h3>
-                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center' }}>
+                <div className="alerts-header-controls">
                     <div id="alerts-pagination-top" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                         <label style={{ fontSize: '0.875rem', color: 'var(--text-muted)' }}>Rows:</label>
                         <select 
@@ -94,7 +94,7 @@ export default function Alerts() {
                         const date = new Date(a.timestamp).toLocaleString();
                         
                         return (
-                            <div className="alert-item" key={a.id} style={{ display: 'flex', alignItems: 'flex-start', gap: '1rem', padding: '1.25rem', borderBottom: '1px solid #edf2f7' }}>
+                            <div className="alert-item" key={a.id}>
                                 <i className="ph ph-warning alert-icon" style={{ fontSize: '2rem', padding: '0.5rem', borderRadius: '50%', color: isAck ? '#a0aec0' : 'var(--danger-color)', background: isAck ? '#edf2f7' : 'rgba(229, 62, 62, 0.1)' }}></i>
                                 <div className="alert-content" style={{ flex: 1 }}>
                                     <div className="alert-title" style={{ fontWeight: 700, marginBottom: '0.25rem', color: 'var(--text-main)' }}>

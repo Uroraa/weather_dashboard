@@ -9,7 +9,7 @@ class AlertService {
     
     async processReading(device, reading, io) {
         const { id: device_id, name: deviceName, notify_email, owner_email } = device;
-        const { temperature, humidity } = reading;
+        const { temperature, humidity, aqi } = reading;
 
         // Check Temperature High limits
         if (device.temp_high !== null && temperature > device.temp_high) {
@@ -26,6 +26,14 @@ class AlertService {
         // Check Humidity Low
         if (device.hum_low !== null && humidity < device.hum_low) {
             await this.triggerAlert(device, 'hum_low', humidity, device.hum_low, io);
+        }
+        // Check AQI High
+        if (device.aqi_high !== null && aqi > device.aqi_high) {
+            await this.triggerAlert(device, 'aqi_high', aqi, device.aqi_high, io);
+        }
+        // Check AQI Low
+        if (device.aqi_low !== null && aqi < device.aqi_low) {
+            await this.triggerAlert(device, 'aqi_low', aqi, device.aqi_low, io);
         }
     }
 
@@ -46,6 +54,8 @@ class AlertService {
         if (type === 'temp_low') message = `Temperature Low: ${value}°C (Threshold < ${threshold}°C)`;
         if (type === 'hum_high') message = `Humidity High: ${value}% (Threshold > ${threshold}%)`;
         if (type === 'hum_low') message = `Humidity Low: ${value}% (Threshold < ${threshold}%)`;
+        if (type === 'aqi_high') message = `AQI High: ${value} (Threshold > ${threshold})`;
+        if (type === 'aqi_low') message = `AQI Low: ${value} (Threshold < ${threshold})`;
 
         const timestamp = new Date().toISOString();
 

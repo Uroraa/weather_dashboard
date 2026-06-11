@@ -1,0 +1,217 @@
+%============================================================
+%  ĐỒ ÁN TỐT NGHIỆP - ĐẠI HỌC BÁCH KHOA HÀ NỘI
+%  Đề tài: Hệ thống AIoT giám sát và dự báo chất lượng
+%          không khí dựa trên dữ liệu chuỗi thời gian
+%============================================================
+
+\documentclass[12pt, a4paper, oneside]{report}
+
+%------------------------------------------------------------
+% ENCODING & FONT
+%------------------------------------------------------------
+\usepackage[utf8]{inputenc}
+\usepackage[T5]{fontenc}
+\usepackage[vietnamese,english]{babel}
+\usepackage{times}
+
+%------------------------------------------------------------
+% PAGE LAYOUT
+% Fix lỗi headheight quá nhỏ: tăng lên 15.5pt
+%------------------------------------------------------------
+\usepackage[
+  top=30mm,
+  bottom=25mm,
+  left=35mm,
+  right=20mm,
+  headheight=15.5pt      % fix fancyhdr warning
+]{geometry}
+
+%------------------------------------------------------------
+% SPACING & FORMATTING
+%------------------------------------------------------------
+\usepackage{setspace}
+\onehalfspacing
+\usepackage{indentfirst}
+\setlength{\parindent}{1.27cm}
+\setlength{\parskip}{6pt}
+
+%------------------------------------------------------------
+% HEADERS & FOOTERS
+%------------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[R]{\small\leftmark}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+\fancypagestyle{plain}{
+  \fancyhf{}
+  \fancyfoot[C]{\thepage}
+  \renewcommand{\headrulewidth}{0pt}
+}
+
+%------------------------------------------------------------
+% GRAPHICS & FIGURES
+%------------------------------------------------------------
+\usepackage{graphicx}
+\usepackage{float}
+\graphicspath{{images/}}
+
+%------------------------------------------------------------
+% TABLES
+%------------------------------------------------------------
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+
+%------------------------------------------------------------
+% MATH
+%------------------------------------------------------------
+\usepackage{amsmath, amssymb}
+
+%------------------------------------------------------------
+% CODE LISTINGS
+%------------------------------------------------------------
+\usepackage{xcolor}
+\usepackage{listings}
+\lstdefinelanguage{JavaScript}{
+  keywords={async,await,break,case,catch,const,continue,default,else,for,function,if,let,module,require,return,switch,throw,try,var,while},
+  sensitive=true,
+  comment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]',
+  morestring=[b]",
+  morestring=[b]`
+}
+\lstset{
+  basicstyle=\small\ttfamily,
+  keywordstyle=\bfseries\color{blue!70!black},
+  commentstyle=\itshape\color{gray},
+  stringstyle=\color{red!60!black},
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  stepnumber=1,
+  frame=single,
+  breaklines=true,
+  breakatwhitespace=false,
+  captionpos=b,
+  tabsize=2,
+  showstringspaces=false
+}
+
+%------------------------------------------------------------
+% HYPERLINKS
+%------------------------------------------------------------
+\usepackage[
+  colorlinks=true,
+  linkcolor=black,
+  citecolor=black,
+  urlcolor=blue,
+  unicode=true
+]{hyperref}
+
+%------------------------------------------------------------
+% BIBLIOGRAPHY
+% Đổi từ biblatex+biber → natbib+bibtex: nhẹ hơn nhiều,
+% không bị timeout trên Overleaf free plan
+%------------------------------------------------------------
+\usepackage[numbers, sort&compress]{natbib}
+
+%------------------------------------------------------------
+% CAPTIONS
+%------------------------------------------------------------
+\usepackage{caption}
+\usepackage{subcaption}
+\captionsetup{
+  labelfont=bf,
+  skip=6pt,
+  font=small
+}
+
+%------------------------------------------------------------
+% MISCELLANEOUS
+% Bỏ microtype: không tương thích tốt với T5/ptm,
+% gây nhiều warning và làm chậm compile
+%------------------------------------------------------------
+\usepackage{enumitem}
+\usepackage{emptypage}
+
+%------------------------------------------------------------
+% CHAPTER TITLE STYLE (căn giữa, in hoa, chuẩn HUST)
+%------------------------------------------------------------
+\usepackage{titlesec}
+\titleformat{\chapter}[display]
+  {\normalfont\large\bfseries\centering}
+  {\MakeUppercase{\chaptertitlename}\ \thechapter.}
+  {0pt}
+  {\large\MakeUppercase}
+\titlespacing*{\chapter}{0pt}{-20pt}{20pt}
+
+\titleformat{\section}
+  {\normalfont\normalsize\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}
+  {\normalfont\normalsize\bfseries}{\thesubsection}{1em}{}
+\titleformat{\subsubsection}
+  {\normalfont\normalsize\itshape}{\thesubsubsection}{1em}{}
+
+%------------------------------------------------------------
+% TOC DEPTH
+%------------------------------------------------------------
+\setcounter{tocdepth}{3}
+\setcounter{secnumdepth}{3}
+
+%============================================================
+% BEGIN DOCUMENT
+%============================================================
+\begin{document}
+\selectlanguage{vietnamese}
+
+% BÌA NGOÀI
+\include{frontmatter/cover}
+
+% BÌA TRONG (có chữ ký GVHD)
+\include{frontmatter/cover_inner}
+
+% PHẦN ĐẦU: đánh số La Mã
+\pagenumbering{roman}
+\setcounter{page}{1}
+
+\include{frontmatter/commitment}
+\include{frontmatter/acknowledgement}
+\include{frontmatter/abstract}
+
+% MỤC LỤC
+\tableofcontents
+\clearpage
+
+% DANH MỤC HÌNH VẼ
+\listoffigures
+\clearpage
+
+% DANH MỤC BẢNG BIỂU
+\listoftables
+\clearpage
+
+% DANH MỤC THUẬT NGỮ
+\include{frontmatter/abbreviations}
+
+% PHẦN THÂN: đánh số Ả Rập
+\pagenumbering{arabic}
+\setcounter{page}{1}
+
+\include{chapters/chapter1}
+\include{chapters/chapter2}
+\include{chapters/chapter3}
+\include{chapters/chapter4}
+\include{chapters/chapter5}
+\include{chapters/chapter6}
+
+% TÀI LIỆU THAM KHẢO
+\clearpage
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+\addcontentsline{toc}{chapter}{TÀI LIỆU THAM KHẢO}
+
+\end{document}

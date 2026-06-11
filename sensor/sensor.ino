@@ -4,14 +4,16 @@
 #include "DHT.h"
 #include <Preferences.h>
 #include <math.h>   // for log(), cos(), sqrt()
-
-// -- WiFi --
-const char* ssid = "Sxmh1";
-const char* password = "123456789@";
+#include <WiFiManager.h> // https://github.com/tzapu/WiFiManager
 
 // -- MQTT --
-const char* mqtt_server = "192.168.2.76";
+char mqtt_server[40] = "192.168.2.76"; // default, will be overwritten by WiFiManager
 const int   mqtt_port   = 1883;
+
+bool shouldSaveConfig = false;
+void saveConfigCallback() {
+    shouldSaveConfig = true;
+}
 
 // -- DHT --
 #define DHTPIN  4
@@ -45,14 +47,7 @@ String getMacAddress() {
 // ============================================================
 // WiFi
 // ============================================================
-void setup_wifi() {
-    Serial.print("Connecting WiFi...");
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500); Serial.print(".");
-    }
-    Serial.println(" OK — IP: " + WiFi.localIP().toString());
-}
+// setup_wifi() has been replaced by WiFiManager in setup()
 
 // ============================================================
 // MQTT callback — nhận config trả về từ server
@@ -64,6 +59,20 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 
     StaticJsonDocument<256> doc;
     if (deserializeJson(doc, msg) != DeserializationError::Ok) return;
+
+    if (doc.containsKey("action") && doc["action"] == "reset") {
+        Serial.println("[MQTT] Received RESET command! Wiping flash...");
+        prefs.begin("device", false);
+        prefs.clear();
+        prefs.end();
+        
+        WiFiManager wm;
+        wm.resetSettings();
+        
+        delay(1000);
+        ESP.restart();
+        return;
+    }
 
     if (doc.containsKey("device_id") && doc.containsKey("api_key")) {
         int    newId  = doc["device_id"].as<int>();
@@ -129,7 +138,27 @@ void reconnectWithAuth() {
             Serial.println(" OK");
             client.subscribe(("devices/" + mac + "/config").c_str(), 1);
         } else {
-            Serial.println(" failed rc=" + String(client.state()) + " — retry 5s");
+            int state = client.state();
+            Serial.println(" failed rc=" + String(state) + " — retry 5s");
+            
+            // If the server rejects the credentials (e.g., API key deleted/invalid), 
+            // clear the stored credentials and restart to trigger re-provisioning.
+            // MQTT_CONNECT_BAD_CREDENTIALS = 4, MQTT_CONNECT_UNAUTHORIZED = 5
+            if (state == 4 || state == 5) {
+                Serial.println("Invalid credentials. Clearing NVS and restarting...");
+                prefs.begin("device", false);
+                prefs.remove("device_id");
+                prefs.remove("api_key");
+                prefs.end();
+                
+                WiFiManager wm;
+                wm.resetSettings();
+
+                // We keep mqtt_server, only remove provisioned credentials
+                delay(1000);
+                ESP.restart();
+            }
+            
             delay(5000);
         }
     }
@@ -141,11 +170,12 @@ void reconnectWithAuth() {
 void setup() {
     Serial.begin(115200);
     dht.begin();
-    setup_wifi();
 
     prefs.begin("device", true);
     deviceId     = prefs.getInt("device_id", -1);
     deviceApiKey = prefs.getString("api_key", "");
+    String saved_mqtt = prefs.getString("mqtt_server", "192.168.2.76");
+    strlcpy(mqtt_server, saved_mqtt.c_str(), sizeof(mqtt_server));
     prefs.end();
 
     if (deviceId != -1 && deviceApiKey.length() > 0) {
@@ -153,6 +183,31 @@ void setup() {
         Serial.println("[Flash] device_id=" + String(deviceId));
     } else {
         Serial.println("[Flash] Chưa provision");
+    }
+
+    WiFiManager wm;
+    wm.setSaveConfigCallback(saveConfigCallback);
+    WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
+    wm.addParameter(&custom_mqtt_server);
+
+    String mac = getMacAddress();
+    mac.replace(":", "");
+    String apName = "Sensor-Setup-" + mac;
+    
+    if (!wm.autoConnect(apName.c_str())) {
+        Serial.println("Failed to connect and hit timeout");
+        delay(3000);
+        ESP.restart();
+    }
+
+    Serial.println("Connected to WiFi!");
+
+    strlcpy(mqtt_server, custom_mqtt_server.getValue(), sizeof(mqtt_server));
+    if (shouldSaveConfig) {
+        prefs.begin("device", false);
+        prefs.putString("mqtt_server", mqtt_server);
+        prefs.end();
+        Serial.println("Saved new MQTT server to flash");
     }
 
     client.setServer(mqtt_server, mqtt_port);
@@ -163,7 +218,21 @@ void setup() {
 // Loop
 // ============================================================
 void loop() {
-    if (WiFi.status() != WL_CONNECTED) setup_wifi();
+    if (WiFi.status() != WL_CONNECTED) {
+        // WiFi connection lost
+        Serial.println("WiFi disconnected. Reconnecting...");
+        WiFi.reconnect();
+        unsigned long startAttempt = millis();
+        while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 10000) {
+            delay(500);
+            Serial.print(".");
+        }
+        if (WiFi.status() != WL_CONNECTED) {
+            Serial.println("Failed to reconnect WiFi. Restarting...");
+            ESP.restart();
+        }
+        Serial.println("\nWiFi reconnected");
+    }
 
     if (!provisioned) {
         static unsigned long lastRetry = 0;
@@ -182,8 +251,8 @@ void loop() {
     if (millis() - lastMsg > SEND_INTERVAL) {
         lastMsg = millis();
 
-        float temperature = dht.readTemperature() - 2.5;
-        float humidity    = dht.readHumidity() + 5;
+        float temperature = dht.readTemperature();
+        float humidity    = dht.readHumidity();
 
         if (isnan(temperature) || isnan(humidity)) {
             Serial.println("DHT read failed! Using mock data (Gaussian).");
@@ -208,10 +277,41 @@ void loop() {
             humidity    = max(0.0f, min(100.0f, humidity));
         }
 
+        // -- Generate Mock AQI --
+        static float aqi_noise_prev = 0.0f;
+        static bool aqi_first_run = true;
+        
+        // Calculate hour of day from uptime
+        float hour = fmod((millis() / 3600000.0f), 24.0f);
+        float daily_cycle = 40.0f + 20.0f * sin(2.0f * M_PI * (hour - 6.0f) / 24.0f);
+        
+        float aqi_rand_z;
+        {
+            float u1 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            float u2 = (float)(esp_random() % 1000000 + 1) / 1000000.0f;
+            aqi_rand_z = sqrt(-2.0f * log(u1)) * cos(2.0f * M_PI * u2);
+        }
+        
+        if (aqi_first_run) {
+            aqi_noise_prev = aqi_rand_z * 5.0f;
+            aqi_first_run = false;
+        } else {
+            aqi_noise_prev = 0.85f * aqi_noise_prev + (aqi_rand_z * 3.0f);
+        }
+        
+        float aqi_spike = 0.0f;
+        if ((esp_random() % 100) < 5) { // 5% probability
+            aqi_spike = 20.0f + (esp_random() % 40000) / 1000.0f; // Uniform(20, 60)
+        }
+        
+        float aqi = daily_cycle + aqi_noise_prev + aqi_spike;
+        aqi = max(0.0f, min(300.0f, aqi)); // Clip(0, 300)
+
         // Topic vẫn dùng api_key — không thay đổi backend
         String topic   = "device/" + deviceApiKey + "/data";
         String payload = "{\"temperature\":" + String(temperature, 1) +
-                         ",\"humidity\":"    + String(humidity, 1)    + "}";
+                         ",\"humidity\":"    + String(humidity, 1)    + 
+                         ",\"aqi\":"         + String(aqi, 1)         + "}";
 
         if (client.publish(topic.c_str(), payload.c_str())) {
             Serial.println("[MQTT OUT] " + payload);

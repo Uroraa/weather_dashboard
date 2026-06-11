@@ -22,10 +22,21 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 const MIN_WINDOW = 24;
 
 const FORECAST_HORIZONS = [
-  { value: '6min',  minutes: 6  },
-  { value: '10min', minutes: 10 },
-  { value: '15min', minutes: 15 },
+  { value: '6min',  minutes: 6,    label: '6 min' },
+  { value: '10min', minutes: 10,   label: '10 min' },
+  { value: '15min', minutes: 15,   label: '15 min' },
+  { value: '1h',    minutes: 60,   label: '1 hour' },
+  { value: '3h',    minutes: 180,  label: '3 hours' },
+  { value: '6h',    minutes: 360,  label: '6 hours' },
+  { value: '12h',   minutes: 720,  label: '12 hours' },
+  { value: '24h',   minutes: 1440, label: '24 hours' },
 ];
+
+const formatHourOnly = (timestampStr) => {
+  if (!timestampStr) return '';
+  const date = new Date(timestampStr);
+  return `${date.getHours().toString().padStart(2, '0')}h`;
+};
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 
@@ -42,6 +53,16 @@ function tempToRgb(val) {
 function humToRgb(val) {
   const t = Math.max(0, Math.min(1, val / 100));
   return [Math.round(lerp(240, 30, t)), Math.round(lerp(160, 100, t)), Math.round(lerp(50, 220, t))];
+}
+
+function aqiToRgb(val) {
+  const t = Math.max(0, Math.min(1, val / 200));
+  if (t < 0.5) {
+    const s = t / 0.5;
+    return [Math.round(lerp(50, 240, s)), Math.round(lerp(200, 200, s)), Math.round(lerp(50, 50, s))];
+  }
+  const s = (t - 0.5) / 0.5;
+  return [Math.round(lerp(240, 240, s)), Math.round(lerp(200, 50, s)), Math.round(lerp(50, 50, s))];
 }
 
 const nowLinePlugin = {
@@ -102,6 +123,12 @@ const chartOptions = {
       min: 0, max: 100,
       title: { display: true, text: 'Humidity (%)', color: '#3182ce', font: { family: "'Inter', sans-serif" } },
       grid: { drawOnChartArea: false }
+    },
+    y2: {
+      type: 'linear', display: true, position: 'right',
+      min: 0, max: 300,
+      title: { display: true, text: 'AQI', color: '#38a169', font: { family: "'Inter', sans-serif" } },
+      grid: { drawOnChartArea: false }
     }
   },
   animation: { duration: 400, easing: 'easeOutQuart' }
@@ -128,9 +155,12 @@ function MapHoverHandler({ grid, W, H, bounds, spatialMode, tooltipRef }) {
       if (spatialMode === 'temperature') {
         el.style.color = '#fc8181';
         el.textContent = '\uD83C\uDF21\uFE0F ' + val.toFixed(1) + '\u00b0C';
-      } else {
+      } else if (spatialMode === 'humidity') {
         el.style.color = '#63b3ed';
         el.textContent = '\uD83D\uDCA7 ' + val.toFixed(1) + '%';
+      } else {
+        el.style.color = '#68d391';
+        el.textContent = '\uD83D\uDCA8 ' + val.toFixed(1);
       }
       el.style.display = 'block';
     },
@@ -210,7 +240,12 @@ export default function Forecast() {
         })(),
         ...FORECAST_HORIZONS.map(h => {
           const idx = spatialData.heatmaps.findIndex(hm => hm.horizon_minute === h.minutes);
-          return idx >= 0 ? { label: `+${h.minutes} min`, idx } : null;
+          if (idx < 0) return null;
+          let label = `+${h.minutes} min`;
+          if (h.minutes >= 60) {
+            label = `+${h.minutes / 60} hr`;
+          }
+          return { label, idx };
         }),
       ].filter(Boolean)
     : [];
@@ -285,11 +320,12 @@ export default function Forecast() {
             const nullArr = n => Array(n).fill(null);
             const lastTemp = readings[readings.length - 1].temperature;
             const lastHum  = readings[readings.length - 1].humidity;
+            const lastAqi  = readings[readings.length - 1].aqi;
             setChartData({
               labels: [
-                ...readings.map(r => new Date(r.timestamp).toLocaleTimeString()),
+                ...readings.map(r => formatHourOnly(r.timestamp)),
                 'Now',
-                ...forecast.map(f => new Date(f.timestamp).toLocaleTimeString())
+                ...forecast.map(f => formatHourOnly(f.timestamp))
               ],
               datasets: [
                 {
@@ -319,6 +355,20 @@ export default function Forecast() {
                   borderColor: 'rgba(49,130,206,0.75)', backgroundColor: 'rgba(49,130,206,0.04)',
                   borderWidth: 2, borderDash: [6, 4], pointRadius: 3, pointHoverRadius: 5,
                   fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y1'
+                },
+                {
+                  label: 'AQI — History',
+                  data: [...readings.map(r => r.aqi), lastAqi, ...nullArr(forecast.length)],
+                  borderColor: '#38a169', backgroundColor: 'rgba(56,161,105,0.08)',
+                  borderWidth: 2, pointRadius: 2, pointHoverRadius: 5,
+                  fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y2'
+                },
+                {
+                  label: 'AQI — Forecast',
+                  data: [...nullArr(readings.length), lastAqi, ...forecast.map(f => f.aqi)],
+                  borderColor: 'rgba(56,161,105,0.75)', backgroundColor: 'rgba(56,161,105,0.04)',
+                  borderWidth: 2, borderDash: [6, 4], pointRadius: 3, pointHoverRadius: 5,
+                  fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y2'
                 }
               ]
             });
@@ -422,7 +472,7 @@ export default function Forecast() {
   return (
     <>
       {activeTab === 'single' && (
-        <div style={{ position: 'absolute', top: '90px', right: '35px', zIndex: 10, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+        <div className="page-selectors">
           <label htmlFor="forecast-horizon-selector" style={{ margin: 0 }}>Horizon:</label>
           <select
             id="forecast-horizon-selector"
@@ -431,7 +481,7 @@ export default function Forecast() {
             onChange={e => setHorizon(e.target.value)}
           >
             {FORECAST_HORIZONS.map(h => (
-              <option key={h.value} value={h.value}>{h.minutes} min</option>
+              <option key={h.value} value={h.value}>{h.label}</option>
             ))}
           </select>
           <label htmlFor="forecast-device-selector" style={{ margin: 0 }}>
@@ -489,7 +539,7 @@ export default function Forecast() {
             <div className="card">
               <div className="card-header" style={{ marginBottom: '1rem' }}>
                 <i className="ph ph-robot"></i>
-                <span>AI Forecast — Next {horizon.replace('min', ' min')} Ahead</span>
+                <span>AI Forecast — Next {FORECAST_HORIZONS.find(h => h.value === horizon)?.label || horizon} Ahead</span>
               </div>
               <div className="chart-container">
                 <Line data={chartData} options={chartOptions} plugins={[nowLinePlugin]} />
@@ -501,7 +551,7 @@ export default function Forecast() {
         {activeTab === 'spatial' && (
           <div className="card">
             <div className="card-header" style={{ marginBottom: '1rem', flexDirection: 'column', alignItems: 'stretch' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <div className="card-header-row" style={{ marginBottom: '0.5rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <i className="ph ph-map-trifold"></i>
                   <span>Spatial Forecast {spatialData ? `— ${spatialData.nodes.filter(n => !n.virtual).length} Sensors · LSTM + Kriging` : ''}</span>
@@ -517,18 +567,27 @@ export default function Forecast() {
                   ))}
                 </select>
               </div>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button
                   className={`btn btn-sm ${spatialMode === 'temperature' ? 'btn-primary' : 'btn-outline'}`}
                   onClick={() => setSpatialMode('temperature')}
+                  style={{ flex: 1, minWidth: '120px', justifyContent: 'center' }}
                 >
                   <i className="ph ph-thermometer"></i> Temperature
                 </button>
                 <button
                   className={`btn btn-sm ${spatialMode === 'humidity' ? 'btn-primary' : 'btn-outline'}`}
                   onClick={() => setSpatialMode('humidity')}
+                  style={{ flex: 1, minWidth: '120px', justifyContent: 'center' }}
                 >
                   <i className="ph ph-drop"></i> Humidity
+                </button>
+                <button
+                  className={`btn btn-sm ${spatialMode === 'aqi' ? 'btn-primary' : 'btn-outline'}`}
+                  onClick={() => setSpatialMode('aqi')}
+                  style={{ flex: 1, minWidth: '120px', justifyContent: 'center' }}
+                >
+                  <i className="ph ph-wind"></i> AQI
                 </button>
               </div>
             </div>
@@ -633,6 +692,7 @@ export default function Forecast() {
                         const b = calcRoomBounds(room);
                         const nodeTemp = (device.last_temperature ?? '—').toString();
                         const nodeHum  = (device.last_humidity ?? '—').toString();
+                        const nodeAqi  = (device.last_aqi ?? '—').toString();
                         return (
                           <Marker
                             key={device.id}
@@ -664,6 +724,7 @@ export default function Forecast() {
                                   <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${device.name}</div>
                                   <div>🌡️ <span style="color:#c53030">${nodeTemp !== '—' ? nodeTemp + '°C' : '—'}</span></div>
                                   <div>💧 <span style="color:#2b6cb0">${nodeHum !== '—' ? nodeHum + '%' : '—'}</span></div>
+                                  <div>💨 <span style="color:#38a169">${nodeAqi !== '—' ? nodeAqi : '—'}</span></div>
                                   <div style="font-size:0.7rem;color:#718096;margin-top:2px">Room: ${room ? room.name : 'Unassigned'}</div>
                                 `;
                                 el.style.display = 'block';
@@ -687,7 +748,7 @@ export default function Forecast() {
                                   Room: {room ? room.name : 'Unassigned'}
                                 </div>
                                 <div style={{ fontSize: '0.85rem' }}>
-                                  🌡️ {nodeTemp !== '—' ? nodeTemp + '°C' : '—'} / 💧 {nodeHum !== '—' ? nodeHum + '%' : '—'}
+                                  🌡️ {nodeTemp !== '—' ? nodeTemp + '°C' : '—'} / 💧 {nodeHum !== '—' ? nodeHum + '%' : '—'} / 💨 {nodeAqi !== '—' ? nodeAqi : '—'}
                                 </div>
                                 {pendingPositions[device.id] && (
                                   <button
@@ -840,11 +901,12 @@ export default function Forecast() {
                         {spatialData && (() => {
                           const slice = spatialData.heatmaps[sliceIdx];
                           if (!slice) return null;
-                          const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
-                          const toRgb = spatialMode === 'temperature' ? tempToRgb : humToRgb;
+                          const grid = spatialMode === 'temperature' ? slice.temperature : spatialMode === 'humidity' ? slice.humidity : slice.aqi;
+                          const toRgb = spatialMode === 'temperature' ? tempToRgb : spatialMode === 'humidity' ? humToRgb : aqiToRgb;
                           const H = grid.length, W = grid[0].length;
                           return (
                             <SVGOverlay
+                              key={`${spatialMode}-${sliceIdx}`}
                               bounds={[[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]]}
                               attributes={{ opacity: 0.65 }}
                             >
@@ -864,8 +926,23 @@ export default function Forecast() {
                           const room = rooms.find(r => r.id === device.room_id);
                           const b = calcRoomBounds(room);
                           const sNode = spatialData?.nodes.find(n => n.device_id === device.id);
-                          const nodeTemp = (sNode?.current_temperature ?? device.last_temperature ?? '—').toString();
-                          const nodeHum  = (sNode?.current_humidity ?? device.last_humidity ?? '—').toString();
+                          const slice = spatialData?.heatmaps[sliceIdx];
+                          const horizonMin = slice ? slice.horizon_minute : 0;
+                          
+                          let nodeTemp = '—';
+                          let nodeHum = '—';
+                          let nodeAqi = '—';
+                          
+                          if (horizonMin === 0) {
+                              nodeTemp = device.last_temperature?.toString() ?? '—';
+                              nodeHum  = device.last_humidity?.toString() ?? '—';
+                              nodeAqi  = device.last_aqi?.toString() ?? '—';
+                          } else if (sNode && sNode.forecast && sNode.forecast.length >= horizonMin) {
+                              const fc = sNode.forecast[horizonMin - 1];
+                              nodeTemp = fc.temperature.toString();
+                              nodeHum  = fc.humidity.toString();
+                              nodeAqi  = fc.aqi.toString();
+                          }
 
                           return (
                             <Marker
@@ -898,6 +975,7 @@ export default function Forecast() {
                                     <div style="font-weight:700;margin-bottom:3px;font-size:0.85rem">${device.name}</div>
                                     <div>🌡️ <span style="color:#c53030">${nodeTemp !== '—' ? nodeTemp + '°C' : '—'}</span></div>
                                     <div>💧 <span style="color:#2b6cb0">${nodeHum !== '—' ? nodeHum + '%' : '—'}</span></div>
+                                    <div>💨 <span style="color:#38a169">${nodeAqi !== '—' ? nodeAqi : '—'}</span></div>
                                   `;
                                   el.style.display = 'block';
                                 },
@@ -921,7 +999,7 @@ export default function Forecast() {
                                   </div>
                                   {sNode?.forecast?.[0] && (
                                     <div style={{ marginTop: 4, fontSize: '0.85rem' }}>
-                                      Next: {sNode.forecast[0].temperature}°C / {sNode.forecast[0].humidity}%
+                                      Next: {sNode.forecast[0].temperature}°C / {sNode.forecast[0].humidity}% / AQI: {sNode.forecast[0].aqi}
                                     </div>
                                   )}
                                   {pendingPositions[device.id] && (
@@ -941,11 +1019,12 @@ export default function Forecast() {
                         {spatialData && (() => {
                           const slice = spatialData.heatmaps[sliceIdx];
                           if (!slice) return null;
-                          const grid = spatialMode === 'temperature' ? slice.temperature : slice.humidity;
+                          const grid = spatialMode === 'temperature' ? slice.temperature : spatialMode === 'humidity' ? slice.humidity : slice.aqi;
                           const H = grid.length, W = grid[0].length;
                           const BOUNDS = [[roomBounds.minLat, roomBounds.minLng], [roomBounds.maxLat, roomBounds.maxLng]];
                           return (
                             <MapHoverHandler
+                              key={`${spatialMode}-${sliceIdx}`}
                               grid={grid} W={W} H={H} bounds={BOUNDS}
                               spatialMode={spatialMode}
                               tooltipRef={tileTooltipRef}
@@ -980,11 +1059,17 @@ export default function Forecast() {
                       <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #1e64ff, #32c832, #e64632)' }} />
                       <span>40°C</span>
                     </>
-                  ) : (
+                  ) : spatialMode === 'humidity' ? (
                     <>
                       <span>0%</span>
                       <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #f0a032, #1e64dc)' }} />
                       <span>100%</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>0</span>
+                      <div style={{ flex: 1, height: '10px', borderRadius: '5px', background: 'linear-gradient(to right, #32c832, #c8c832, #e64632)' }} />
+                      <span>200+</span>
                     </>
                   )}
                 </div>

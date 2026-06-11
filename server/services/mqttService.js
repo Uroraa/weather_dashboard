@@ -16,6 +16,16 @@ function publishDeviceConfig(mac, deviceId, apiKey) {
     }, () => {})
 }
 
+function publishDeviceReset(mac) {
+    if (!_aedes) return
+    _aedes.publish({
+        topic:   `devices/${mac}/config`,
+        payload: Buffer.from(JSON.stringify({ action: 'reset' })),
+        qos:     1,
+        retain:  false, // Do NOT retain this! Otherwise it causes a reset loop on re-provisioning.
+    }, () => {})
+}
+
 function getPendingDevices() {
     return Array.from(pendingDevices.values())
 }
@@ -76,18 +86,11 @@ async function initMqtt(io, alertService, PORT = 1883) {
                 return callback(null, true)
             }
 
-            // api_key wrong or device deleted — check if device even exists
+            // api_key wrong or device deleted
             const deviceExist = await db.query('SELECT id FROM devices WHERE id = $1', [deviceId])
             if (deviceExist.rows.length === 0) {
-                // Device was deleted — allow connection so ESP32 can subscribe to its
-                // config topic and receive new credentials when the user re-registers it
-                const macMatch = client.id?.match(/^ESP32-(.+)$/)
-                if (macMatch) {
-                    client.needsReprovision = true
-                    client.reprovisionMac   = macMatch[1]
-                    console.log(`[MQTT Auth] Device deleted — allow re-provision: mac=${macMatch[1]}`)
-                    return callback(null, true)
-                }
+                console.log(`[MQTT Auth] Device deleted (id=${deviceId}) — rejecting auth to force ESP32 reset.`)
+                return callback(null, false)
             }
 
             console.log(`[MQTT Auth] Sai credentials: device_id=${deviceId}`)
@@ -129,6 +132,17 @@ async function initMqtt(io, alertService, PORT = 1883) {
                     chip_model:       chip_model || null,
                     seen_at:          new Date().toISOString(),
                 })
+                
+                // Clear any existing retained config/reset payload on this topic so the ESP32 doesn't trigger it
+                if (_aedes) {
+                    _aedes.publish({
+                        topic:   `devices/${mac_address}/config`,
+                        payload: Buffer.from(''),
+                        qos:     1,
+                        retain:  true,
+                    }, () => {})
+                }
+
                 console.log(`[Provision] Device pending (chờ đăng ký): mac=${mac_address}`)
             }
 
@@ -142,10 +156,7 @@ async function initMqtt(io, alertService, PORT = 1883) {
     // ============================================================
     aedes.on('client', (client) => {
         console.log(`[MQTT] Connected: ${client?.id}`)
-        if (client.needsReprovision && client.reprovisionMac) {
-            addPendingDevice(client.reprovisionMac, null, null)
-            console.log(`[MQTT] Re-provision pending: mac=${client.reprovisionMac}`)
-        } else if (client.deviceId) {
+        if (client.deviceId) {
             // Clear retained config so the firmware callback doesn't fire on future reconnects
             const macMatch = client.id?.match(/^ESP32-(.+)$/)
             if (macMatch) {
@@ -207,20 +218,21 @@ async function initMqtt(io, alertService, PORT = 1883) {
                     return
                 }
 
-                const { temperature, humidity } = data
-                if (temperature === undefined || humidity === undefined) return
+                const { temperature, humidity, aqi } = data
+                if (temperature === undefined || humidity === undefined || aqi === undefined) return
 
                 const time = new Date().toISOString()
 
                 await db.query(
-                    'INSERT INTO readings (device_id, temperature, humidity, timestamp) VALUES ($1, $2, $3, $4)',
-                    [device.id, temperature, humidity, time]
+                    'INSERT INTO readings (device_id, temperature, humidity, aqi, timestamp) VALUES ($1, $2, $3, $4, $5)',
+                    [device.id, temperature, humidity, aqi, time]
                 )
 
                 const newReading = {
                     device_id:   device.id,
                     temperature,
                     humidity,
+                    aqi,
                     timestamp:   time,
                     source:      'sensor'
                 }
@@ -232,7 +244,7 @@ async function initMqtt(io, alertService, PORT = 1883) {
                     io.to(`user_${device.owner_user_id}`).emit('new_reading', newReading)
                 }
 
-                console.log(`[MQTT] ${device.name}: T=${temperature}, H=${humidity}`)
+                console.log(`[MQTT] ${device.name}: T=${temperature}, H=${humidity}, AQI=${aqi}`)
 
             } catch (err) {
                 console.error('[MQTT] Error processing publish:', err)
@@ -243,4 +255,4 @@ async function initMqtt(io, alertService, PORT = 1883) {
     return aedes
 }
 
-module.exports = { initMqtt, publishDeviceConfig, getPendingDevices, addPendingDevice, removePendingDevice }
+module.exports = { initMqtt, publishDeviceConfig, publishDeviceReset, getPendingDevices, addPendingDevice, removePendingDevice }

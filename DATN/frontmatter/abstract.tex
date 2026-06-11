@@ -1,0 +1,39 @@
+%============================================================
+% TÓM TẮT NỘI DUNG ĐỒ ÁN
+%============================================================
+\chapter*{TÓM TẮT NỘI DUNG ĐỒ ÁN}
+\addcontentsline{toc}{chapter}{Tóm tắt nội dung đồ án}
+
+Ô nhiễm không khí đang là một trong những vấn đề môi trường nghiêm trọng
+nhất hiện nay, đặc biệt tại các đô thị lớn như Hà Nội. Tuy nhiên, các hệ thống
+quan trắc chất lượng không khí hiện có thường có chi phí triển khai cao, mật độ
+trạm thưa và thiếu khả năng dự báo sớm. Đồ án trình bày việc thiết kế và triển
+khai một hệ thống AIoT giám sát và dự báo chất lượng không khí theo thời gian
+thực, sử dụng phần cứng ESP32 chi phí thấp kết hợp với mô hình học máy trên dữ
+liệu chuỗi thời gian.
+
+Node cảm biến sử dụng ESP32, DHT11 để đo nhiệt độ, độ ẩm và sinh dữ liệu AQI mô
+phỏng nhằm hoàn thiện pipeline giám sát chất lượng không khí. Thiết bị hỗ trợ
+cấu hình Wi-Fi ban đầu qua AP \texttt{Sensor-Setup-[MAC]}, đăng ký với backend
+qua MQTT topic \texttt{devices/register}, nhận \texttt{device\_id} và
+\texttt{api\_key}, sau đó gửi payload \texttt{temperature}, \texttt{humidity},
+\texttt{aqi} định kỳ 5 giây qua topic \texttt{device/\{api\_key\}/data}.
+
+Backend Node.js/Express tích hợp Aedes MQTT broker, PostgreSQL, JWT và Socket.io
+để xác thực thiết bị, lưu dữ liệu, kiểm tra cảnh báo và đẩy sự kiện
+\texttt{new\_reading} tới dashboard theo thời gian thực. Frontend được xây dựng
+bằng React 19 và Vite, sử dụng Chart.js cho biểu đồ, Leaflet cho heatmap không
+gian và các trang Dashboard, Devices, Forecast, Spatial Forecast, Rooms, Alerts.
+
+Pipeline dự báo được triển khai bằng FastAPI và PyTorch. Mô hình LSTM sử dụng ba
+feature đầu vào gồm nhiệt độ, độ ẩm và AQI, lookback 30 phút và forecast horizon
+15 phút. Với bài toán không gian, service \texttt{spatial\_forecast.py} kết hợp
+IDW để sinh node ảo ở biên phòng và Kriging để nội suy lưới 40$\times$50 điểm,
+trả về dữ liệu JSON cho React Leaflet hiển thị heatmap.
+
+Kết quả triển khai cho thấy hệ thống có thể thu thập, lưu trữ, hiển thị realtime,
+dự báo và trực quan hóa phân bố không gian trong một kiến trúc hoàn chỉnh, phù
+hợp cho nghiên cứu, giáo dục và mở rộng thành hệ thống giám sát môi trường thực
+tế.
+
+

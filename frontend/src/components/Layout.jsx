@@ -20,6 +20,10 @@ const Layout = () => {
     const showStatus = PAGES_WITH_STATUS.includes(location.pathname);
     const { label, dotClass, textColor } = STATUS_CONFIG[activeStatus] || STATUS_CONFIG.offline;
 
+    const closeSidebar = () => {
+        setSidebarOpen(false);
+    };
+
     const getPageTitle = () => {
         switch (location.pathname) {
             case '/': return 'Dashboard';
@@ -30,42 +34,43 @@ const Layout = () => {
             case '/rooms': return 'Rooms Management';
             case '/admin': return 'Admin Portal';
             case '/account': return 'Account Management';
-            default: return 'IoT Monitor';
+            default: return 'EMF System';
         }
     };
 
     return (
         <div className="app-layout">
+            {sidebarOpen && <div className="sidebar-overlay" onClick={closeSidebar}></div>}
             <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} id="sidebar">
                 <div className="sidebar-header">
                     <i className="ph-fill ph-cpu"></i>
-                    <span>IoT Monitor</span>
+                    <span>EMF System</span>
                 </div>
 
                 <nav className="sidebar-nav">
-                    <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end>
+                    <NavLink to="/" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} end onClick={closeSidebar}>
                         <i className="ph ph-squares-four"></i>
                         <span>Dashboard</span>
                     </NavLink>
-                    <NavLink to="/devices" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/devices" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
                         <i className="ph ph-devices"></i>
                         <span>Devices</span>
                     </NavLink>
-                    <NavLink to="/alerts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/alerts" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
                         <i className="ph ph-bell-ringing"></i>
                         <span>Alerts</span>
                     </NavLink>
-                    <NavLink to="/forecast" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/forecast" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
                         <i className="ph ph-cloud-sun"></i>
                         <span>Forecast</span>
                     </NavLink>
-                    <NavLink to="/rooms" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
+                    <NavLink to="/rooms" className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`} onClick={closeSidebar}>
                         <i className="ph ph-house"></i>
                         <span>Rooms</span>
                     </NavLink>
 
                     {isAuthenticated && user?.role === 'admin' && (
-                        <NavLink to="/admin" className={({ isActive }) => `nav-item admin-nav ${isActive ? 'active' : ''}`} id="admin-nav">
+                        <NavLink to="/admin" className={({ isActive }) => `nav-item admin-nav ${isActive ? 'active' : ''}`} id="admin-nav" onClick={closeSidebar}>
                             <i className="ph ph-shield-check"></i>
                             <span>Admin Portal</span>
                         </NavLink>

@@ -1,0 +1,541 @@
+%============================================================
+% CHƯƠNG 5: CÁC GIẢI PHÁP VÀ ĐÓNG GÓP NỔI BẬT
+%============================================================
+\chapter{CÁC GIẢI PHÁP VÀ ĐÓNG GÓP NỔI BẬT}
+\label{chap:contribution}
+
+Chương này tập trung làm nổi bật ba giải pháp kỹ thuật đặc sắc và có
+giá trị thực tiễn cao nhất trong đồ án. Với mỗi giải pháp, cấu trúc
+trình bày gồm ba phần: đặt vấn đề (bài toán kỹ thuật cần giải quyết),
+giải pháp (cách tiếp cận và triển khai cụ thể), và kết quả đạt được.
+Ba đóng góp nổi bật bao gồm: (1) pipeline dự báo chuỗi thời gian LSTM
+phục vụ qua FastAPI microservice, (2) nội suy không gian Kriging/IDW
+để tạo heatmap phân bố môi trường thời gian thực, và (3) kiến trúc
+truyền thông MQTT kết hợp Socket.io đảm bảo độ trễ thấp cho toàn hệ
+thống.
+
+%------------------------------------------------------------
+\section{Pipeline dự báo chuỗi thời gian LSTM qua FastAPI
+microservice}
+\label{sec:contrib:lstm}
+%------------------------------------------------------------
+
+\subsection{Đặt vấn đề}
+\label{subsec:contrib:lstm:problem}
+
+Trong các hệ thống quan trắc môi trường truyền thống, dữ liệu cảm biến
+chỉ được thu thập và hiển thị theo thời gian thực mà không có khả năng
+dự báo xu hướng tương lai. Điều này đặt người vận hành vào thế bị động
+- chỉ phản ứng khi các chỉ số đã vượt ngưỡng nguy hiểm thay vì chủ
+động can thiệp trước.
+
+Bài toán đặt ra là tích hợp khả năng dự báo chuỗi thời gian vào hệ
+thống với các ràng buộc kỹ thuật cụ thể:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Không block luồng chính:} Backend Node.js đang xử lý
+    đồng thời MQTT, Socket.io và REST API. Việc chạy inference ML nặng
+    trong cùng tiến trình sẽ block event loop, gây gián đoạn toàn bộ
+    hệ thống.
+  \item \textbf{Tích hợp PyTorch:} Node.js không có binding native
+    tốt cho PyTorch. Chạy Python subprocess trong Node.js là giải pháp
+    tạm thời, không ổn định và khó mở rộng.
+  \item \textbf{Chuẩn hóa dữ liệu đầu vào:} Mô hình LSTM yêu cầu dữ
+    liệu đầu vào được chuẩn hóa (normalize) bằng cùng scaler đã dùng
+    khi huấn luyện. Việc tái tạo scaler mỗi lần inference là tốn kém
+    và dễ sai.
+  \item \textbf{Khả năng mở rộng độc lập:} Khi cần thay thế mô hình
+    ML (ví dụ từ LSTM sang Transformer) không nên ảnh hưởng đến
+    backend Node.js.
+\end{itemize}
+
+\subsection{Giải pháp}
+\label{subsec:contrib:lstm:solution}
+
+Hệ thống giải quyết các ràng buộc trên bằng cách tách ML inference
+thành \textbf{hai FastAPI microservice độc lập}:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Time-Series Forecast service} (cổng 8000, file
+    \texttt{forecast/time\_forecast/main.py}): Nhận request từ
+    Node.js, query PostgreSQL, chạy LSTM inference và trả về mảng dự
+    báo 6/10/15 phút hoặc 1/3/6/12/24 giờ.
+  \item \textbf{Spatial Forecast service} (cổng 8001, file
+    \texttt{forecast/spatial\_forecast.py}): Chạy LSTM cho từng
+    node rồi cấp dữ liệu cho Kriging/IDW nội suy lưới 40$\times$50,
+    trả về dữ liệu heatmap cho Leaflet.
+\end{itemize}
+
+Kiến trúc này áp dụng nguyên tắc \textit{separation of concerns}:
+Node.js chịu trách nhiệm về luồng dữ liệu và nghiệp vụ, Python
+service chịu trách nhiệm về tính toán ML.
+
+\textbf{Quy trình huấn luyện mô hình:}
+
+Mã giả của quy trình huấn luyện LSTM được trình bày như sau:
+
+\begin{lstlisting}[language=Python, caption={LSTM training pseudocode}, label={lst:lstm_train}]
+# 1. Load data from PostgreSQL
+data = query("SELECT temperature, humidity, aqi
+              FROM readings ORDER BY timestamp")
+
+# 2. Min-Max normalization, save scaler for inference reuse
+scaler = MinMaxScaler()
+data_scaled = scaler.fit_transform(data)
+joblib.dump(scaler, 'scaler.pkl')
+
+# 3. Create (X, y) pairs using sliding window
+# X shape: (N, window=30, features=3)
+# y shape: (N, horizon=15, features=3)
+X, y = create_sequences(data_scaled,
+                         window=30, horizon=15)
+
+# 4. Define LSTM architecture (PyTorch)
+class LSTMModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size=3,
+                            hidden_size=64,
+                            num_layers=2,
+                            batch_first=True,
+                            dropout=0.2)
+        self.fc = nn.Linear(64, 15 * 3)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        # Take hidden state at last step
+        return self.fc(out[:, -1, :]).view(-1, 15, 3)
+
+# 5. Train with Adam optimizer, MSE loss
+model = LSTMModel()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.MSELoss()
+
+for epoch in range(num_epochs):
+    pred = model(X_train)
+    loss = criterion(pred, y_train)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+# 6. Save model weights
+torch.save(model.state_dict(), 'lstm_model.pth')
+\end{lstlisting}
+
+\textbf{Quy trình inference tại FastAPI service:}
+
+\begin{lstlisting}[language=Python, caption={Inference pseudocode at FastAPI service}, label={lst:lstm_infer}]
+# Startup: load model and scaler once
+model = LSTMModel()
+model.load_state_dict(torch.load('lstm_model.pth'))
+model.eval()
+scaler = joblib.load('scaler.pkl')
+
+@app.get("/forecast")
+async def forecast(device_id: int, db=Depends(get_db)):
+    # 1. Fetch 30 latest records from PostgreSQL
+    rows = await db.fetch(
+        "SELECT temperature, humidity, aqi FROM readings
+         WHERE device_id=$1
+         ORDER BY timestamp DESC LIMIT 30", device_id)
+
+    # 2. Normalize using saved scaler
+    data = scaler.transform(rows)   # shape: (30, 3)
+
+    # 3. Create input tensor
+    X = torch.tensor(data).unsqueeze(0).float()
+                                    # shape: (1, 30, 3)
+    # 4. Inference (no_grad to save memory)
+    with torch.no_grad():
+        pred = model(X)             # shape: (1, 15, 3)
+
+    # 5. Inverse transform to real values
+    result = scaler.inverse_transform(
+        pred.squeeze(0).numpy())    # shape: (15, 3)
+
+    return {"forecast": result.tolist()}
+\end{lstlisting}
+
+Hình~\ref{fig:lstm_pipeline} minh họa toàn bộ pipeline từ dữ liệu
+cảm biến đến kết quả dự báo hiển thị trên dashboard.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{lstm_pipeline}
+  \caption{Pipeline dự báo chuỗi thời gian LSTM qua FastAPI microservice}
+  \label{fig:lstm_pipeline}
+\end{figure}
+
+Đồ án triển khai \textbf{hai mô hình LSTM song song}:
+\texttt{lstm\_model.pth} dự báo ngắn hạn 15 phút và
+\texttt{lstm\_model\_long.pth} dự báo dài hạn hơn, mỗi mô hình có
+scaler riêng (\texttt{scaler.pkl} và \texttt{scaler\_long.pkl}). Người
+dùng có thể chọn chế độ dự báo phù hợp từ dashboard.
+
+\subsection{Kết quả đạt được}
+\label{subsec:contrib:lstm:result}
+
+Giải pháp FastAPI microservice mang lại các kết quả cụ thể:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Tách biệt hoàn toàn:} Backend Node.js không bị block
+    trong quá trình inference. Khi FastAPI service gặp sự cố, backend
+    trả về lỗi graceful thay vì crash toàn hệ thống.
+  \item \textbf{Thời gian inference:} Mỗi lần dự báo 15 phút cho một
+    node hoàn thành trong dưới 200ms trên môi trường CPU (không GPU),
+    đáp ứng yêu cầu realtime của hệ thống.
+  \item \textbf{Mô hình hội tụ tốt:} Loss curve
+    (Hình~\ref{fig:lstm_loss_curve}) cho thấy training loss và
+    validation loss giảm đều trong quá trình huấn luyện. Kết quả hiện
+    tại được sử dụng làm mốc đánh giá ban đầu và có thể tiếp tục cải
+    thiện khi mở rộng tập dữ liệu hoặc tinh chỉnh siêu tham số.
+  \item \textbf{Khả năng mở rộng:} Việc thay thế kiến trúc mô hình
+    chỉ cần sửa file Python trong FastAPI service mà không cần thay
+    đổi bất kỳ dòng code nào trong Node.js.
+\end{itemize}
+
+\subsection{Đánh giá độ chính xác mô hình}
+\label{subsec:contrib:lstm:evaluation}
+
+Độ chính xác của mô hình được đánh giá bằng sai số tuyệt đối trung
+bình (Mean Absolute Error - MAE) tại ba mốc dự báo 6 phút, 10 phút và
+15 phút. Các chỉ số trong Bảng~\ref{tab:lstm_mae_by_horizon} là kết
+quả thực nghiệm hiện tại, được dùng làm baseline ban đầu cho hệ thống.
+Trong các lần huấn luyện tiếp theo, kết quả này có thể tiếp tục được
+cải thiện bằng cách bổ sung dữ liệu huấn luyện, điều chỉnh kích thước
+window, số tầng LSTM hoặc các siêu tham số tối ưu hóa.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.82\textwidth]{loss_curve}
+  \caption{Đường cong loss trong quá trình huấn luyện mô hình LSTM}
+  \label{fig:lstm_loss_curve}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \caption{Sai số MAE của mô hình LSTM theo từng mốc dự báo}
+  \label{tab:lstm_mae_by_horizon}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Mốc dự báo} & \textbf{MAE nhiệt độ ($^\circ$C)}
+      & \textbf{MAE độ ẩm (\%)} & \textbf{MAE AQI} \\
+    \midrule
+    6 phút  & 0.216 & 0.910 & 4.854 \\
+    10 phút & 0.244 & 0.880 & 4.921 \\
+    15 phút & 0.278 & 0.921 & 5.012 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Kết quả cho thấy sai số nhiệt độ duy trì dưới 0.3$^\circ$C ở cả ba
+mốc dự báo, trong khi sai số độ ẩm xấp xỉ 1\%. Sai số AQI dao động
+trong khoảng 4.854 đến 5.012, phù hợp cho mục tiêu cảnh báo xu hướng
+và hỗ trợ người dùng ra quyết định sớm. Khi horizon tăng từ 6 phút lên
+15 phút, MAE nhiệt độ và AQI tăng nhẹ, phản ánh đặc trưng thường gặp
+của bài toán dự báo chuỗi thời gian: mốc dự báo càng xa thì độ bất
+định càng lớn.
+
+%------------------------------------------------------------
+\section{Nội suy không gian Kriging/IDW để tạo heatmap phân bố
+môi trường}
+\label{sec:contrib:spatial}
+%------------------------------------------------------------
+
+\subsection{Đặt vấn đề}
+\label{subsec:contrib:spatial:problem}
+
+Với $n$ node cảm biến đặt rải rác trong không gian phòng, hệ thống chỉ
+có $n$ điểm dữ liệu rời rạc tại $n$ vị trí cố định. Người vận hành
+muốn biết điều kiện môi trường tại \textbf{bất kỳ điểm nào} trong
+phòng, không chỉ tại vị trí đặt cảm biến. Các thách thức cụ thể:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Số lượng node hạn chế:} Trong môi trường thực tế,
+    không thể đặt cảm biến dày đặc khắp nơi do chi phí và hạ tầng.
+    Với ít node, nội suy biên (vùng góc phòng xa tất cả node) thường
+    cho kết quả kém chính xác.
+  \item \textbf{Phân bố không đều:} Các node thường tập trung ở một
+    số vị trí thuận tiện, không phân bố đều trong không gian, gây ra
+    hiệu ứng clustering làm méo kết quả nội suy.
+  \item \textbf{Hiệu năng realtime:} Tính toán nội suy trên lưới
+    40$\times$50 = 2000 điểm phải đủ nhanh để dashboard cập nhật
+    trong vài giây.
+\end{itemize}
+
+\subsection{Giải pháp}
+\label{subsec:contrib:spatial:solution}
+
+Hệ thống triển khai chiến lược nội suy hai tầng kết hợp
+\textbf{IDW để sinh node ảo} và \textbf{Kriging để nội suy chính}.
+
+\textbf{Tầng 1 - Sinh node ảo bằng IDW:}
+
+Để cải thiện độ bao phủ tại các góc phòng, trước khi chạy Kriging,
+hệ thống dùng IDW để sinh thêm các \textbf{node ảo (virtual nodes)}
+tại các góc và cạnh phòng. Giá trị của node ảo được ước tính từ các
+node thực theo công thức IDW:
+
+\begin{equation}
+  \hat{z}_{corner} = \frac{\displaystyle\sum_{i=1}^{n}
+    \frac{z_i}{d_i^2}}
+    {\displaystyle\sum_{i=1}^{n} \frac{1}{d_i^2}}
+\end{equation}
+
+Trong đó $d_i$ là khoảng cách từ góc phòng đến node thực $i$, và
+$z_i$ là giá trị nhiệt độ, độ ẩm hoặc AQI của node $i$. Các node ảo này
+được thêm vào tập điểm đầu vào cho Kriging, giúp thuật toán có thêm
+thông tin ở vùng biên, tránh hiện tượng extrapolation không kiểm soát.
+
+\textbf{Tầng 2 - Nội suy Kriging trên toàn bộ lưới:}
+
+Mã giả của quy trình nội suy không gian được trình bày dưới đây:
+
+\begin{lstlisting}[language=Python, caption={Spatial interpolation pseudocode (Kriging/IDW)}, label={lst:spatial}]
+from pykrige.ok import OrdinaryKriging
+from scipy.interpolate import griddata
+import numpy as np
+
+def spatial_forecast(nodes: list[dict], room: dict):
+    """
+    nodes: [{"lat": ..., "lng": ...,
+              "temperature": ..., "humidity": ..., "aqi": ...}, ...]
+    room:  {"center_lat", "center_lng",
+             "width_m", "length_m"}
+    """
+    # 1. Create virtual nodes at 4 room corners via IDW
+    corners = get_room_corners(room)
+    virtual_nodes = [idw_estimate(c, nodes)
+                     for c in corners]
+    all_nodes = nodes + virtual_nodes
+
+    # 2. Extract coordinates and values
+    lats = [n["lat"] for n in all_nodes]
+    lngs = [n["lng"] for n in all_nodes]
+    temps = [n["temperature"] for n in all_nodes]
+    hums  = [n["humidity"]    for n in all_nodes]
+
+    # 3. Create 40x50 target grid
+    grid_lat = np.linspace(min(lats), max(lats), 40)
+    grid_lng = np.linspace(min(lngs), max(lngs), 50)
+    grid_lat2d, grid_lng2d = np.meshgrid(
+        grid_lat, grid_lng, indexing='ij')
+
+    # 4. Kriging interpolation for temperature
+    ok_temp = OrdinaryKriging(
+        lngs, lats, temps,
+        variogram_model='gaussian',
+        verbose=False, enable_plotting=False)
+    z_temp, _ = ok_temp.execute(
+        'grid', grid_lng, grid_lat)
+
+    # 5. Kriging interpolation for humidity
+    ok_hum = OrdinaryKriging(
+        lngs, lats, hums,
+        variogram_model='gaussian',
+        verbose=False, enable_plotting=False)
+    z_hum, _ = ok_hum.execute(
+        'grid', grid_lng, grid_lat)
+
+    return {
+        "grid_lat": grid_lat.tolist(),
+        "grid_lng": grid_lng.tolist(),
+        "temperature_grid": z_temp.tolist(),
+        "humidity_grid":    z_hum.tolist()
+    }
+\end{lstlisting}
+
+Kết quả lưới 40$\times$50 điểm được gửi về frontend dưới dạng JSON.
+Dashboard React dùng \textbf{react-leaflet} để render lưới này thành
+lớp heatmap màu sắc (gradient từ xanh lam đến đỏ) phủ lên bản đồ sàn
+phòng cho từng chỉ số nhiệt độ, độ ẩm hoặc AQI, như minh họa trong Hình~\ref{fig:heatmap_demo}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{system_spatial_forecast}
+  \caption{Heatmap phân bố môi trường không gian được tạo từ nội suy Kriging, hiển thị trên bản đồ Leaflet}
+  \label{fig:heatmap_demo}
+\end{figure}
+
+\subsection{Kết quả đạt được}
+\label{subsec:contrib:spatial:result}
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Bao phủ toàn không gian:} Từ $n$ điểm đo rời rạc, hệ
+    thống tái tạo bản đồ phân bố liên tục trên toàn bộ diện tích
+    phòng với độ phân giải lưới 40$\times$50 điểm.
+  \item \textbf{Node ảo cải thiện biên:} Kỹ thuật sinh node ảo tại
+    góc phòng bằng IDW giúp Kriging cho kết quả mượt mà hơn ở vùng
+    biên, tránh hiệu ứng extrapolation bất thường khi không có node
+    thực tại vùng đó.
+  \item \textbf{Hiệu năng đủ dùng:} Thời gian tính toán Kriging cho
+    lưới 40$\times$50 trên CPU thông thường dưới 2 giây, đáp ứng yêu
+    cầu cập nhật heatmap theo yêu cầu của người dùng.
+  \item \textbf{Kết hợp dự báo:} Heatmap có thể được tạo không chỉ
+    từ dữ liệu thực đo hiện tại mà còn từ kết quả dự báo LSTM, cho
+    phép người dùng xem \textbf{heatmap dự báo} - phân bố môi
+    trường ước tính trong 15 phút tới.
+\end{itemize}
+
+%------------------------------------------------------------
+\section{Kiến trúc truyền thông MQTT kết hợp Socket.io đảm bảo
+độ trễ thấp}
+\label{sec:contrib:comm}
+%------------------------------------------------------------
+
+\subsection{Đặt vấn đề}
+\label{subsec:contrib:comm:problem}
+
+Hệ thống quan trắc realtime đặt ra yêu cầu nghiêm ngặt về độ trễ
+end-to-end: từ khi cảm biến đọc giá trị đến khi biểu đồ trên dashboard
+được cập nhật phải dưới 2 giây. Cách tiếp cận đơn giản nhất là
+\textbf{HTTP polling} - frontend định kỳ gọi API để lấy dữ liệu mới
+- nhưng có nhiều nhược điểm:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Độ trễ không xác định:} Nếu polling mỗi 5 giây, độ
+    trễ trung bình là 2.5 giây, tệ nhất là 5 giây.
+  \item \textbf{Lãng phí tài nguyên:} Hầu hết các request polling
+    trả về ``không có dữ liệu mới'', tốn băng thông và CPU server
+    vô ích.
+  \item \textbf{Không scalable:} Với 100 client đang mở dashboard,
+    server nhận 20 request/giây chỉ để kiểm tra dữ liệu mới.
+\end{itemize}
+
+Ngoài ra, giao tiếp giữa node IoT và server cũng cần được thiết kế
+cẩn thận: HTTP POST từ ESP32 mỗi 5 giây tạo ra overhead lớn (TCP
+handshake, HTTP headers ~500 bytes) cho thiết bị có tài nguyên hạn chế.
+
+\subsection{Giải pháp}
+\label{subsec:contrib:comm:solution}
+
+Hệ thống áp dụng chiến lược \textbf{hai giao thức bổ trợ nhau}: MQTT
+cho luồng dữ liệu từ node IoT lên server, và Socket.io cho luồng dữ
+liệu từ server xuống dashboard.
+
+\textbf{Tầng 1 - MQTT (Node IoT $\to$ Server):}
+
+MQTT được chọn vì overhead tối thiểu: header chỉ 2 byte cố định, kết
+nối TCP được duy trì liên tục (persistent connection) nên không tốn
+chi phí handshake mỗi lần gửi. Mỗi 5 giây, ESP32 publish một message
+nhỏ gọn:
+
+\begin{lstlisting}[language=C, caption={MQTT payload from ESP32 node},
+label={lst:mqtt_payload}]
+// JSON payload sent via MQTT: ~60 bytes
+StaticJsonDocument<128> doc;
+doc["temperature"] = temperature;
+doc["humidity"]    = humidity;
+doc["aqi"]         = aqi; // bat buoc cho ML pipeline
+
+char payload[128];
+serializeJson(doc, payload);
+
+// Publish to topic device/{api_key}/data
+client.publish(topic.c_str(), payload.c_str());
+\end{lstlisting}
+
+\textbf{Tầng 2 - Aedes Broker (Server-side MQTT):}
+
+Thay vì triển khai Mosquitto broker riêng biệt, hệ thống tích hợp
+\textbf{Aedes} - MQTT broker thuần Node.js - trực tiếp trong tiến
+trình backend. Điều này cho phép xử lý message MQTT trong cùng event
+loop với logic nghiệp vụ, tránh độ trễ mạng giữa broker và backend:
+
+\begin{lstlisting}[language=JavaScript, caption={MQTT message handling
+in Aedes broker}, label={lst:aedes}]
+aedes.on('publish', async (packet, client) => {
+  const topic = packet.topic;
+
+  // Only handle sensor data topics
+  if (!topic.startsWith('device/')) return;
+
+  // 1. Extract api_key from topic
+  const apiKey = topic.split('/')[1];
+
+  // 2. Validate and get device_id from PostgreSQL
+  const device = await db.query(
+    'SELECT id, owner_user_id FROM devices
+     WHERE api_key=$1', [apiKey]);
+  if (!device.rows.length) return;  // skip if invalid key
+
+  // 3. Parse JSON payload
+  const { temperature, humidity, aqi } = JSON.parse(
+    packet.payload.toString());
+
+  // 4. Save to PostgreSQL
+  await db.query(
+    'INSERT INTO readings
+     (device_id, temperature, humidity, aqi, timestamp)
+     VALUES ($1,$2,$3,$4,NOW())',
+    [device.rows[0].id, temperature, humidity, aqi]);
+
+  // 5. Check alert thresholds (alertService)
+  await alertService.check(device.rows[0], {
+    temperature, humidity, aqi });
+
+  // 6. Push realtime to dashboard via Socket.io
+  io.to(`device_${device.rows[0].id}`)
+    .emit('new_reading', { temperature, humidity, aqi,
+                           timestamp: new Date() });
+});
+\end{lstlisting}
+
+\textbf{Tầng 3 - Socket.io (Server $\to$ Dashboard):}
+
+Khi dashboard mở, client xác thực bằng JWT và đăng ký nhận dữ liệu
+của thiết bị cụ thể:
+
+\begin{lstlisting}[language=JavaScript, caption={Client-side Socket.io in React dashboard}, label={lst:socketio_client}]
+// Connect and authenticate
+const socket = io(SERVER_URL);
+socket.emit('authenticate', { token: jwtToken });
+
+// Subscribe to device data
+socket.emit('subscribe_device', { deviceId });
+
+// Listen for new data and update chart
+socket.on('new_reading', (data) => {
+  setChartData(prev => ({
+    labels: [...prev.labels, data.timestamp],
+    temperature: [...prev.temperature, data.temperature],
+    humidity:    [...prev.humidity,    data.humidity],
+    aqi:         [...prev.aqi,         data.aqi]
+  }));
+});
+\end{lstlisting}
+
+Hình~\ref{fig:comm_flow} minh họa toàn bộ luồng truyền thông từ node
+ESP32 đến dashboard với các mốc thời gian tương ứng.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\textwidth]{comm_flow}
+  \caption{Luồng truyền thông end-to-end của hệ thống}
+  \label{fig:comm_flow}
+\end{figure}
+
+\subsection{Kết quả đạt được}
+\label{subsec:contrib:comm:result}
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Độ trễ end-to-end thấp:} Từ khi ESP32 publish message
+    MQTT đến khi biểu đồ Chart.js trên dashboard cập nhật, độ trễ
+    trung bình đo được dưới 500ms trong điều kiện mạng LAN, đáp ứng
+    tốt yêu cầu realtime.
+  \item \textbf{Không polling:} Socket.io push-based hoàn toàn loại bỏ
+    HTTP polling, giảm số lượng request xuống backend từ $O(n_{client}
+    \times f_{poll})$ về 0 khi không có dữ liệu mới.
+  \item \textbf{Aedes tích hợp đơn giản hóa triển khai:} Không cần
+    cài đặt và vận hành Mosquitto riêng biệt. Toàn bộ hệ thống backend
+    chỉ cần một tiến trình Node.js duy nhất với lệnh \texttt{node
+    server/index.js}.
+  \item \textbf{Xác thực hai lớp:} Node IoT xác thực bằng
+    \texttt{api\_key} qua MQTT, người dùng dashboard xác thực bằng JWT
+    qua Socket.io. Hai lớp xác thực độc lập đảm bảo chỉ thiết bị hợp
+    lệ mới được ghi dữ liệu và chỉ người dùng hợp lệ mới xem được.
+  \item \textbf{Phòng Socket.io theo device/user:} Server emit đến room
+    \texttt{device\_\{id\}} và \texttt{user\_\{id\}}, đảm bảo mỗi
+    client chỉ nhận dữ liệu của thiết bị mình đang xem, không bị
+    ``nhiễu'' từ các thiết bị khác.
+\end{itemize}

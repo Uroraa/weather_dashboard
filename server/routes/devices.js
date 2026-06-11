@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../models/db');
 const { v4: uuidv4 } = require('uuid');
 const { authenticateToken, optionalAuthenticateToken } = require('../middleware/auth');
-const { publishDeviceConfig, getPendingDevices, addPendingDevice, removePendingDevice } = require('../services/mqttService');
+const { publishDeviceConfig, publishDeviceReset, getPendingDevices, addPendingDevice, removePendingDevice } = require('../services/mqttService');
 const { xyToLatLng, latLngToXY } = require('../utils/geoUtils');
 
 // List devices detected via MQTT but not yet registered
@@ -20,7 +20,8 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
                 SELECT d.*, u.name as owner_name, 
                        (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
                        (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
-                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity,
+                       (SELECT aqi FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_aqi
                 FROM devices d 
                 JOIN users u ON d.owner_user_id = u.id 
                 ORDER BY d.created_at DESC
@@ -30,7 +31,8 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
                 SELECT d.*, 
                        (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
                        (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
-                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity,
+                       (SELECT aqi FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_aqi
                 FROM devices d 
                 WHERE owner_user_id = $1 ORDER BY created_at DESC
             `, [req.user.id]);
@@ -39,7 +41,8 @@ router.get('/', optionalAuthenticateToken, async (req, res) => {
                 SELECT d.*, 
                        (SELECT timestamp FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_reading,
                        (SELECT temperature FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_temperature,
-                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity
+                       (SELECT humidity FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_humidity,
+                       (SELECT aqi FROM readings WHERE device_id = d.id ORDER BY timestamp DESC LIMIT 1) as last_aqi
                 FROM devices d ORDER BY created_at DESC
             `);
         }
@@ -102,7 +105,7 @@ router.post('/', authenticateToken, async (req, res) => {
 // Update device thresholds & email notify setting & room
 router.put('/:id', authenticateToken, async (req, res) => {
     try {
-        const { temp_high, temp_low, hum_high, hum_low, notify_email, x, y, lat, lng, room_id } = req.body;
+        const { temp_high, temp_low, hum_high, hum_low, aqi_high, aqi_low, notify_email, x, y, lat, lng, room_id } = req.body;
         const deviceRes = await db.query('SELECT owner_user_id, x, y, lat, lng, room_id FROM devices WHERE id = $1', [req.params.id]);
         const device = deviceRes.rows[0];
 
@@ -122,8 +125,8 @@ router.put('/:id', authenticateToken, async (req, res) => {
         // With dynamic rooms, the frontend calculates and sends both lat/lng and x/y.
 
         await db.query(
-            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, notify_email=$5, x=$6, y=$7, lat=$8, lng=$9, room_id=$10 WHERE id=$11`,
-            [temp_high, temp_low, hum_high, hum_low, notify_email ? true : false, finalX, finalY, finalLat, finalLng, finalRoomId, req.params.id]
+            `UPDATE devices SET temp_high=$1, temp_low=$2, hum_high=$3, hum_low=$4, aqi_high=$5, aqi_low=$6, notify_email=$7, x=$8, y=$9, lat=$10, lng=$11, room_id=$12 WHERE id=$13`,
+            [temp_high, temp_low, hum_high, hum_low, aqi_high, aqi_low, notify_email ? true : false, finalX, finalY, finalLat, finalLng, finalRoomId, req.params.id]
         );
 
         res.json({ message: 'Device updated successfully' });
@@ -136,7 +139,7 @@ router.put('/:id', authenticateToken, async (req, res) => {
 // Delete a device
 router.delete('/:id', authenticateToken, async (req, res) => {
     try {
-        const deviceRes = await db.query('SELECT owner_user_id FROM devices WHERE id = $1', [req.params.id]);
+        const deviceRes = await db.query('SELECT owner_user_id, mac_address FROM devices WHERE id = $1', [req.params.id]);
         const device = deviceRes.rows[0];
         if (!device) return res.status(404).json({ error: 'Device not found' });
 
@@ -145,6 +148,11 @@ router.delete('/:id', authenticateToken, async (req, res) => {
         }
 
         await db.query('DELETE FROM devices WHERE id = $1', [req.params.id]);
+        
+        if (device.mac_address) {
+            publishDeviceReset(device.mac_address);
+        }
+
         res.json({ message: 'Device deleted successfully' });
     } catch (err) {
         console.error(err);
@@ -191,13 +199,14 @@ router.get('/:id/summary', optionalAuthenticateToken, async (req, res) => {
         const statsRes = await db.query(`
             SELECT 
                 MIN(temperature) as min_temp, MAX(temperature) as max_temp, AVG(temperature) as avg_temp,
-                MIN(humidity) as min_hum, MAX(humidity) as max_hum, AVG(humidity) as avg_hum
+                MIN(humidity) as min_hum, MAX(humidity) as max_hum, AVG(humidity) as avg_hum,
+                MIN(aqi) as min_aqi, MAX(aqi) as max_aqi, AVG(aqi) as avg_aqi
             FROM readings 
             WHERE device_id = $1 AND timestamp >= $2
         `, [deviceId, last24hObj]);
 
         const latestRes = await db.query(`
-            SELECT temperature, humidity, timestamp 
+            SELECT temperature, humidity, aqi, timestamp 
             FROM readings 
             WHERE device_id = $1 ORDER BY timestamp DESC LIMIT 1
         `, [deviceId]);

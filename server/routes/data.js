@@ -22,20 +22,20 @@ router.post('/', async (req, res) => {
             return res.status(401).json({ error: 'Unauthorized: Invalid device key' });
         }
 
-        const { temperature, humidity, timestamp } = req.body;
-        if (temperature === undefined || humidity === undefined) {
-            return res.status(400).json({ error: 'Temperature and humidity required' });
+        const { temperature, humidity, aqi, timestamp } = req.body;
+        if (temperature === undefined || humidity === undefined || aqi === undefined) {
+            return res.status(400).json({ error: 'Temperature, humidity, and aqi required' });
         }
 
         const time = timestamp || new Date().toISOString();
 
         // 1. Insert reading into DB
         await db.query(
-            'INSERT INTO readings (device_id, temperature, humidity, timestamp) VALUES ($1, $2, $3, $4)',
-            [device.id, temperature, humidity, time]
+            'INSERT INTO readings (device_id, temperature, humidity, aqi, timestamp) VALUES ($1, $2, $3, $4, $5)',
+            [device.id, temperature, humidity, aqi, time]
         );
 
-        const newReading = { device_id: device.id, temperature, humidity, timestamp: time, source: 'sensor' };
+        const newReading = { device_id: device.id, temperature, humidity, aqi, timestamp: time, source: 'sensor' };
 
         // 2. Alert Generation Logic
         const io = req.app.get('io');

@@ -24,6 +24,8 @@ export default function Devices() {
     const [editTempLow, setEditTempLow] = useState('');
     const [editHumHigh, setEditHumHigh] = useState('');
     const [editHumLow, setEditHumLow] = useState('');
+    const [editAqiHigh, setEditAqiHigh] = useState('');
+    const [editAqiLow, setEditAqiLow] = useState('');
     const [editEmailNotify, setEditEmailNotify] = useState(false);
     const [editX, setEditX] = useState('');
     const [editY, setEditY] = useState('');
@@ -148,6 +150,8 @@ export default function Devices() {
             temp_low: editTempLow || null,
             hum_high: editHumHigh || null,
             hum_low: editHumLow || null,
+            aqi_high: editAqiHigh || null,
+            aqi_low: editAqiLow || null,
             notify_email: editEmailNotify,
             x: editX !== '' ? parseFloat(editX) : null,
             y: editY !== '' ? parseFloat(editY) : null,
@@ -184,6 +188,8 @@ export default function Devices() {
         setEditTempLow(d.temp_low ?? '');
         setEditHumHigh(d.hum_high ?? '');
         setEditHumLow(d.hum_low ?? '');
+        setEditAqiHigh(d.aqi_high ?? '');
+        setEditAqiLow(d.aqi_low ?? '');
         setEditEmailNotify(!!d.notify_email);
         setEditX(d.x ?? '');
         setEditY(d.y ?? '');
@@ -377,6 +383,14 @@ export default function Devices() {
                             <div className="form-group">
                                 <label>Humidity Low (%)</label>
                                 <input type="number" step="1" value={editHumLow} onChange={e => setEditHumLow(e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>AQI High</label>
+                                <input type="number" step="1" value={editAqiHigh} onChange={e => setEditAqiHigh(e.target.value)} />
+                            </div>
+                            <div className="form-group">
+                                <label>AQI Low</label>
+                                <input type="number" step="1" value={editAqiLow} onChange={e => setEditAqiLow(e.target.value)} />
                             </div>
                         </div>
                         

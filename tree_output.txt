@@ -1,0 +1,80 @@
+.
+├── .env
+├── .gitignore
+├── .kiro
+    └── specs
+        └── dashboard-chart-data-filtering-fix
+├── .vscode
+    └── settings.json
+├── README.md
+├── frontend
+    ├── .gitignore
+    ├── README.md
+    ├── dist
+        ├── assets
+        ├── favicon.svg
+        ├── icons.svg
+        └── index.html
+    ├── eslint.config.js
+    ├── index.html
+    ├── package-lock.json
+    ├── package.json
+    ├── public
+        ├── assets
+        ├── favicon.svg
+        └── icons.svg
+    ├── src
+        ├── App.css
+        ├── App.jsx
+        ├── assets
+        ├── components
+        ├── context
+        ├── index.css
+        ├── main.jsx
+        └── pages
+    └── vite.config.js
+├── forecast
+    ├── loss_curve.png
+    ├── loss_curve_long.png
+    ├── lstm_inference.py
+    ├── lstm_inference_long.py
+    ├── lstm_model.pth
+    ├── lstm_model_long.pth
+    ├── lstm_train.py
+    ├── lstm_train_long.py
+    ├── main.py
+    ├── scaler.pkl
+    ├── scaler_long.pkl
+    └── spatial_forecast.py
+├── package-lock.json
+├── package.json
+├── scripts
+    ├── simulate_esp32.js
+    └── test_mqtt_publish.js
+├── sensor
+    └── sensor.ino
+├── server
+    ├── controllers
+    ├── index.js
+    ├── middleware
+        ├── auth.js
+        └── role.js
+    ├── models
+        └── db.js
+    ├── routes
+        ├── alerts.js
+        ├── auth.js
+        ├── data.js
+        ├── devices.js
+        ├── forecast.js
+        ├── rooms.js
+        ├── spatialForecast.js
+        └── users.js
+    ├── services
+        ├── alertService.js
+        ├── email.js
+        ├── forecastService.js
+        └── mqttService.js
+    └── utils
+        └── geoUtils.js
+└── tree_output.txt

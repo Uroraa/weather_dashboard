@@ -18,6 +18,7 @@ export default function DeviceDetails() {
 
     const [temperature, setTemperature] = useState('--');
     const [humidity, setHumidity] = useState('--');
+    const [aqi, setAqi] = useState('--');
 
     const [activeTab, setActiveTab] = useState('chart');
     const [historyData, setHistoryData] = useState([]);
@@ -28,7 +29,8 @@ export default function DeviceDetails() {
         labels: Array(MAX_CHART_POINTS).fill(''),
         datasets: [
             { label: 'Temp', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#e53e3e', yAxisID: 'y', tension: 0.4 },
-            { label: 'Hum', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 }
+            { label: 'Hum', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 },
+            { label: 'AQI', data: Array(MAX_CHART_POINTS).fill(null), borderColor: '#38a169', yAxisID: 'y2', tension: 0.4 }
         ]
     });
 
@@ -66,6 +68,7 @@ export default function DeviceDetails() {
                     const latest = data[data.length - 1];
                     setTemperature(latest.temperature);
                     setHumidity(latest.humidity);
+                    setAqi(latest.aqi);
                 }
 
                 const loginTime = localStorage.getItem('loginTime');
@@ -80,12 +83,14 @@ export default function DeviceDetails() {
                     const labels = [...Array(padLen).fill(''), ...chartReadings.map(r => new Date(r.timestamp).toLocaleTimeString())].slice(-MAX_CHART_POINTS);
                     const temps = [...Array(padLen).fill(null), ...chartReadings.map(r => r.temperature)].slice(-MAX_CHART_POINTS);
                     const hums = [...Array(padLen).fill(null), ...chartReadings.map(r => r.humidity)].slice(-MAX_CHART_POINTS);
+                    const aqis = [...Array(padLen).fill(null), ...chartReadings.map(r => r.aqi)].slice(-MAX_CHART_POINTS);
 
                     setLiveChartData({
                         labels,
                         datasets: [
                             { label: 'Temp', data: temps, borderColor: '#e53e3e', yAxisID: 'y', tension: 0.4 },
-                            { label: 'Hum', data: hums, borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 }
+                            { label: 'Hum', data: hums, borderColor: '#3182ce', yAxisID: 'y1', tension: 0.4 },
+                            { label: 'AQI', data: aqis, borderColor: '#38a169', yAxisID: 'y2', tension: 0.4 }
                         ]
                     });
                 }
@@ -130,6 +135,7 @@ export default function DeviceDetails() {
 
             setTemperature(r.temperature);
             setHumidity(r.humidity);
+            setAqi(r.aqi);
 
             // Add to history table
             setHistoryData(prev => {
@@ -143,19 +149,22 @@ export default function DeviceDetails() {
                 const labels = [...prev.labels];
                 const temps = [...prev.datasets[0].data];
                 const hums = [...prev.datasets[1].data];
+                const aqis = [...prev.datasets[2].data];
 
-                labels.shift(); temps.shift(); hums.shift();
+                labels.shift(); temps.shift(); hums.shift(); aqis.shift();
 
                 labels.push(new Date(r.timestamp || Date.now()).toLocaleTimeString());
                 temps.push(r.temperature);
                 hums.push(r.humidity);
+                aqis.push(r.aqi);
 
                 return {
                     ...prev,
                     labels,
                     datasets: [
                         { ...prev.datasets[0], data: temps },
-                        { ...prev.datasets[1], data: hums }
+                        { ...prev.datasets[1], data: hums },
+                        { ...prev.datasets[2], data: aqis }
                     ]
                 };
             });
@@ -169,9 +178,9 @@ export default function DeviceDetails() {
     }, [deviceId, isAuthenticated, token]);
 
     const exportCSV = () => {
-        let csv = 'Timestamp,Temperature,Humidity\n';
+        let csv = 'Timestamp,Temperature,Humidity,AQI\n';
         historyData.forEach(r => {
-            csv += `${new Date(r.timestamp).toISOString()},${r.temperature},${r.humidity}\n`;
+            csv += `${new Date(r.timestamp).toISOString()},${r.temperature},${r.humidity},${r.aqi}\n`;
         });
         const blob = new Blob([csv], { type: 'text/csv' });
         const url = window.URL.createObjectURL(blob);
@@ -185,7 +194,8 @@ export default function DeviceDetails() {
         responsive: true, maintainAspectRatio: false,
         scales: {
             y: { type: 'linear', position: 'left', suggestedMin: 10, suggestedMax: 45 },
-            y1: { type: 'linear', position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false } }
+            y1: { type: 'linear', position: 'right', min: 0, max: 100, grid: { drawOnChartArea: false } },
+            y2: { type: 'linear', position: 'right', min: 0, max: 300, grid: { drawOnChartArea: false } }
         }
     };
 
@@ -220,6 +230,10 @@ export default function DeviceDetails() {
                         <div className="card metric-card">
                             <div className="card-header"><i className="ph ph-drop hum-icon"></i><span>Latest Humidity</span></div>
                             <div className="metric-value-wrapper"><span className="metric-value" id="val-hum">{humidity}</span><span className="metric-unit">%</span></div>
+                        </div>
+                        <div className="card metric-card">
+                            <div className="card-header"><i className="ph ph-wind"></i><span>Latest AQI</span></div>
+                            <div className="metric-value-wrapper"><span className="metric-value" id="val-aqi">{aqi}</span></div>
                         </div>
                     </div>
 
@@ -262,7 +276,7 @@ export default function DeviceDetails() {
                                 <div className="table-wrapper">
                                     <table>
                                         <thead>
-                                            <tr><th>Time</th><th>Temperature (°C)</th><th>Humidity (%)</th></tr>
+                                            <tr><th>Time</th><th>Temperature (°C)</th><th>Humidity (%)</th><th>AQI</th></tr>
                                         </thead>
                                         <tbody>
                                             {paginatedHistory.map((d, i) => (
@@ -270,6 +284,7 @@ export default function DeviceDetails() {
                                                     <td>{new Date(d.timestamp).toLocaleString()}</td>
                                                     <td><span className="text-danger">{d.temperature}</span></td>
                                                     <td><span style={{ color: '#3182ce' }}>{d.humidity}</span></td>
+                                                    <td><span style={{ color: '#38a169' }}>{d.aqi}</span></td>
                                                 </tr>
                                             ))}
                                         </tbody>

@@ -1,0 +1,181 @@
+%============================================================
+% CHƯƠNG 6: KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN
+%============================================================
+\chapter{KẾT LUẬN VÀ HƯỚNG PHÁT TRIỂN}
+\label{chap:conclusion}
+
+Chương này tổng kết quá trình thực hiện đồ án, đánh giá những thành
+tựu đạt được so với mục tiêu ban đầu và nhận diện các hạn chế còn
+tồn tại. Cuối cùng, chương đề xuất các hướng phát triển tiềm năng
+để nâng cao chất lượng và mở rộng phạm vi ứng dụng của hệ thống
+trong tương lai.
+
+%------------------------------------------------------------
+\section{Kết luận}
+\label{sec:conclusion:summary}
+%------------------------------------------------------------
+
+Trước thực trạng các hệ thống quan trắc môi trường hiện tại hoặc có
+chi phí quá cao, hoặc thiếu khả năng dự báo và trực quan hóa không
+gian, đồ án đã đề xuất và triển khai thành công một \textbf{hệ thống
+AIoT giám sát và dự báo chất lượng không khí} hoàn chỉnh với chi phí
+thấp và mã nguồn mở.
+
+\subsection{Kết quả đạt được}
+\label{subsec:conclusion:result}
+
+Về mặt kỹ thuật, hệ thống đã đạt được các thành tựu cụ thể sau:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Node cảm biến IoT:} Các node ESP32/DHT11 hoạt động
+    ổn định, thu thập và gửi dữ liệu định kỳ 5 giây qua MQTT với
+    cơ chế tự động đăng ký (provisioning) và khôi phục kết nối
+    (reconnect) không cần can thiệp thủ công.
+
+  \item \textbf{Backend xử lý thời gian thực:} Kiến trúc Node.js
+    tích hợp Aedes MQTT broker và Socket.io hoạt động ổn định,
+    phân phối dữ liệu đến dashboard với độ trễ end-to-end trung
+    bình dưới 500ms trong điều kiện mạng LAN.
+
+  \item \textbf{Pipeline dự báo LSTM:} Mô hình LSTM (PyTorch) với
+    window size 30 và forecast horizon 15 phút được huấn luyện hội
+    tụ tốt, phục vụ inference qua FastAPI microservice trong dưới
+    200ms mỗi lần dự báo.
+
+  \item \textbf{Nội suy không gian Kriging/IDW:} Từ $n$ điểm đo
+    rời rạc, hệ thống tái tạo bản đồ phân bố nhiệt độ, độ ẩm và AQI
+    liên tục trên lưới 40$\times$50 điểm, render heatmap trực quan
+    trên Leaflet trong dưới 2 giây.
+
+  \item \textbf{Dashboard React:} Giao diện người dùng hiển thị dữ
+    liệu realtime, biểu đồ lịch sử, kết quả dự báo và heatmap
+    không gian trên cùng một nền tảng web, không cần tải lại trang.
+
+  \item \textbf{Chi phí thấp:} Tổng chi phí phần cứng một node
+    cảm biến dưới 150.000 VND, thấp hơn nhiều lần so với các
+    thiết bị thương mại tương đương, phù hợp triển khai mật độ cao.
+\end{itemize}
+
+\subsection{Đánh giá so với mục tiêu}
+\label{subsec:conclusion:eval}
+
+So sánh với 6 mục tiêu cụ thể đề ra ở Chương~\ref{chap:intro},
+hệ thống đã đáp ứng đầy đủ tất cả các mục tiêu trong phạm vi
+prototype. Đặc biệt, sự kết hợp giữa \textbf{dự báo chuỗi thời
+gian} (LSTM) và \textbf{nội suy không gian} (Kriging/IDW) trong
+cùng một hệ thống là điểm kỹ thuật nổi bật, chưa được tích hợp
+trong các giải pháp DIY tương tự hiện có.
+
+\subsection{Hạn chế}
+\label{subsec:conclusion:limit}
+
+Tuy nhiên, đồ án vẫn còn một số hạn chế cần nhìn nhận thẳng thắn:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Cảm biến hạn chế:} Hệ thống hiện chỉ đo nhiệt độ
+    và độ ẩm qua DHT11, chưa tích hợp các cảm biến quan trọng hơn
+    như PM2.5, CO$_2$ hay VOC vốn liên quan trực tiếp đến chỉ số
+    AQI.
+
+  \item \textbf{Độ chính xác DHT11:} Cảm biến DHT11 có sai số
+    $\pm 2^\circ$C và $\pm 5\%$RH, chưa đạt chuẩn đo lường y tế
+    hay môi trường chính thức.
+
+  \item \textbf{Dữ liệu huấn luyện hạn chế:} Mô hình LSTM được
+    huấn luyện trên tập dữ liệu thu thập trong môi trường thực
+    nghiệm quy mô nhỏ, chưa đủ đa dạng để đảm bảo tổng quát hóa
+    tốt trong mọi điều kiện thực tế.
+
+  \item \textbf{Nội suy không gian với ít node:} Kriging cho kết
+    quả tốt nhất khi có nhiều điểm đo. Với chỉ 2--3 node, kết quả
+    nội suy còn phụ thuộc nhiều vào vị trí đặt node và có thể chưa
+    phản ánh chính xác thực tế.
+
+  \item \textbf{Chưa có đánh giá lâm sàng:} Các kết quả thực
+    nghiệm chỉ mang tính tham khảo trong điều kiện phòng lab,
+    chưa được kiểm chứng theo tiêu chuẩn đo lường quốc gia hay
+    so sánh với thiết bị tham chiếu chuẩn.
+
+  \item \textbf{Bảo mật chưa hoàn thiện:} Hệ thống chưa mã hóa
+    kênh truyền MQTT (chưa dùng MQTT over TLS), tiềm ẩn rủi ro
+    bảo mật khi triển khai trên mạng công cộng.
+
+  \item \textbf{Thông tin kết nối cơ sở dữ liệu:} Trong giai đoạn
+    đầu phát triển, thông tin xác thực PostgreSQL
+    (\texttt{DB\_PASSWORD}) được hardcode trực tiếp trong các file
+    Python ML (\texttt{forecast/*.py}). Hệ thống đã được khắc phục
+    bằng cách chuyển toàn bộ sang đọc từ biến môi trường thông qua
+    file \texttt{.env} (sử dụng thư viện \texttt{python-dotenv}),
+    phù hợp với thực hành bảo mật tốt nhất (security best
+    practices) trong phát triển phần mềm.
+\end{itemize}
+
+%------------------------------------------------------------
+\section{Hướng phát triển}
+\label{sec:conclusion:future}
+%------------------------------------------------------------
+
+Dựa trên những kết quả đạt được và hạn chế đã nhận diện, đồ án
+đề xuất các hướng phát triển cụ thể như sau:
+
+\subsection{Mở rộng khả năng cảm biến}
+\label{subsec:future:sensor}
+
+Ưu tiên hàng đầu là tích hợp thêm các cảm biến quan trọng để đo
+được chỉ số AQI thực sự: cảm biến PMS5003 hoặc SDS011 đo PM2.5
+và PM10, cảm biến MH-Z19 đo CO$_2$, và cảm biến SGP30 đo VOC.
+Thay thế DHT11 bằng DHT22 hoặc SHT31 để cải thiện độ chính xác.
+Việc bổ sung cảm biến GPS cho phép triển khai ngoài trời với
+định vị tự động thay vì nhập tọa độ thủ công.
+
+\subsection{Nâng cao mô hình Machine Learning}
+\label{subsec:future:ml}
+
+Nghiên cứu và so sánh các kiến trúc mô hình tiên tiến hơn như
+Temporal Fusion Transformer (TFT) hoặc N-BEATS cho bài toán dự báo
+đa biến, đặc biệt khi số lượng features tăng lên. Áp dụng
+\textbf{federated learning} để huấn luyện mô hình trên dữ liệu từ
+nhiều node phân tán mà không cần tập trung dữ liệu về máy chủ,
+đảm bảo quyền riêng tư. Xây dựng pipeline tự động tái huấn luyện
+(auto-retraining) khi phát hiện model drift.
+
+\subsection{Cải thiện nội suy không gian}
+\label{subsec:future:spatial}
+
+Nghiên cứu các phương pháp nội suy không gian nâng cao như
+Co-Kriging (kết hợp nhiều biến tương quan) hoặc tích hợp mô hình
+CFD (Computational Fluid Dynamics) cho các không gian phức tạp.
+Xây dựng cơ chế tự động xác định vị trí tối ưu để đặt thêm node
+cảm biến dựa trên phân tích phương sai Kriging.
+
+\subsection{Tối ưu bảo mật và hạ tầng}
+\label{subsec:future:infra}
+
+Triển khai \textbf{MQTT over TLS} để mã hóa toàn bộ kênh truyền
+từ node IoT đến broker. Áp dụng mô hình \textbf{zero-trust} với
+xác thực thiết bị bằng certificate thay vì chỉ dùng api\_key.
+Containerize toàn bộ hệ thống bằng Docker Compose để dễ dàng
+triển khai trên nhiều môi trường. Đánh giá khả năng mở rộng
+(scalability) với hàng trăm node đồng thời thông qua load testing.
+
+\subsection{Tích hợp hệ sinh thái và mở rộng ứng dụng}
+\label{subsec:future:integration}
+
+Phát triển ứng dụng di động (React Native) để người dùng có thể
+theo dõi và nhận cảnh báo mọi lúc mọi nơi. Tích hợp với các nền
+tảng smarthome phổ biến như Home Assistant hoặc Google Home để
+kết hợp điều khiển thiết bị dựa trên dữ liệu môi trường (ví dụ:
+tự động bật điều hòa khi nhiệt độ vượt ngưỡng). Xây dựng
+\textbf{public API} và tài liệu hướng dẫn để cộng đồng nghiên
+cứu có thể tích hợp dữ liệu vào các ứng dụng khác.
+
+\subsection{Thử nghiệm và đánh giá quy mô lớn}
+\label{subsec:future:evaluation}
+
+Tiến hành triển khai thử nghiệm thực tế với 10--20 node trong môi
+trường thực (văn phòng, trường học, khu dân cư) và so sánh kết
+quả với thiết bị đo chuẩn để đánh giá độ chính xác khách quan.
+Thực hiện nghiên cứu người dùng (user study) để đánh giá tính
+khả dụng của dashboard và cải thiện UX dựa trên phản hồi thực tế.
+Công bố tập dữ liệu thu thập được và mã nguồn hệ thống như một
+đóng góp mở cho cộng đồng nghiên cứu AIoT và quan trắc môi trường.

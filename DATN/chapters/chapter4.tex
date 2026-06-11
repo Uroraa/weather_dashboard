@@ -1,0 +1,1065 @@
+%============================================================
+% CHƯƠNG 4: THIẾT KẾ, TRIỂN KHAI VÀ ĐÁNH GIÁ HỆ THỐNG
+%============================================================
+\chapter{THIẾT KẾ, TRIỂN KHAI VÀ ĐÁNH GIÁ HỆ THỐNG}
+\label{chap:design}
+
+Chương này trình bày toàn bộ quá trình thiết kế và xây dựng hệ thống
+AIoT giám sát và dự báo chất lượng không khí. Nội dung bao gồm thiết
+kế kiến trúc tổng thể theo mô hình bốn tầng, thiết kế chi tiết từng
+thành phần (phần cứng, firmware, backend, ML pipeline, cơ sở dữ liệu,
+dashboard), kết quả xây dựng và kiểm thử, cùng thông tin triển khai
+thực tế.
+
+%------------------------------------------------------------
+\section{Thiết kế kiến trúc}
+\label{sec:design:arch}
+%------------------------------------------------------------
+
+\subsection{Lựa chọn kiến trúc phần mềm}
+\label{subsec:design:arch:choice}
+
+Hệ thống được thiết kế theo \textbf{kiến trúc bốn tầng} kết hợp mô
+hình IoT Gateway, thể hiện trong Hình~\ref{fig:arch_overview}. Kiến
+trúc này phân tách rõ ràng trách nhiệm của từng tầng, đảm bảo khả năng
+mở rộng độc lập và dễ bảo trì:
+
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Tầng thu thập (Edge Layer):} Node cảm biến ESP32/DHT11
+    đọc dữ liệu và gửi lên qua MQTT. Tầng này hoạt động hoàn toàn
+    tự động, không cần can thiệp người dùng sau khi cấu hình ban đầu.
+  \item \textbf{Tầng truyền dẫn (Transport Layer):} Giao thức MQTT
+    với Aedes broker tích hợp trong Node.js, đảm bảo truyền dữ liệu
+    nhẹ, độ trễ thấp và hỗ trợ many node đồng thời.
+  \item \textbf{Tầng xử lý và lưu trữ (Backend Layer):} Node.js/Express
+    xử lý nghiệp vụ, PostgreSQL lưu trữ dữ liệu chuỗi thời gian,
+    FastAPI/PyTorch chạy LSTM inference và nội suy Kriging/IDW.
+  \item \textbf{Tầng hiển thị (Presentation Layer):} React dashboard
+    nhận dữ liệu realtime qua Socket.io, hiển thị biểu đồ Chart.js
+    và heatmap Leaflet.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{arch_overview}
+  \caption{Kiến trúc tổng quan của hệ thống AIoT giám sát và dự báo
+  chất lượng không khí}
+  \label{fig:arch_overview}
+\end{figure}
+
+Lý do lựa chọn kiến trúc này so với các phương án khác:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{So với kiến trúc monolithic:} Việc tách FastAPI ML
+    service khỏi Node.js backend cho phép mỗi service scale độc lập
+    và tránh block event loop khi chạy inference nặng.
+  \item \textbf{So với kiến trúc serverless:} Hệ thống cần duy trì
+    kết nối MQTT và WebSocket liên tục, không phù hợp với mô hình
+    serverless stateless.
+  \item \textbf{So với Cloud-only:} Aedes broker tích hợp trong
+    Node.js giảm một hop mạng (không cần Mosquitto riêng), giảm độ
+    trễ và đơn giản hóa triển khai.
+\end{itemize}
+
+\subsection{Thiết kế tổng quan các gói}
+\label{subsec:design:arch:packages}
+
+Hình~\ref{fig:package_diagram} mô tả biểu đồ phụ thuộc gói tổng quan
+của hệ thống, phân chia thành bốn nhóm chính tương ứng với bốn tầng
+kiến trúc.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{package_diagram}
+  \caption{Biểu đồ phụ thuộc gói tổng quan của hệ thống}
+  \label{fig:package_diagram}
+\end{figure}
+
+Cấu trúc thư mục dự án phản ánh trực tiếp kiến trúc này:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \texttt{sensor/} - Firmware ESP32 (Arduino/C++)
+  \item \texttt{server/} - Backend Node.js/Express
+    \begin{itemize}
+      \item \texttt{controllers/} - Xử lý HTTP request
+      \item \texttt{routes/} - Định nghĩa API endpoint
+      \item \texttt{services/} - Logic nghiệp vụ
+        (alertService, mqttService, forecastService)
+      \item \texttt{middleware/} - Xác thực JWT, phân quyền
+      \item \texttt{models/} - Kết nối PostgreSQL
+    \end{itemize}
+  \item \texttt{lstm\_train/} - Python ML pipeline
+    (train, inference, spatial\_forecast FastAPI)
+  \item \texttt{frontend/src/} - React dashboard
+    \begin{itemize}
+      \item \texttt{pages/} - Các trang chính
+      \item \texttt{components/} - UI components
+      \item \texttt{context/} - React Context quản lý
+        trạng thái toàn cục
+    \end{itemize}
+\end{itemize}
+
+%------------------------------------------------------------
+\section{Thiết kế chi tiết}
+\label{sec:design:detail}
+%------------------------------------------------------------
+
+\subsection{Thiết kế phần cứng node cảm biến}
+\label{subsec:design:hardware}
+
+\subsubsection*{a. Sơ đồ kết nối phần cứng}
+
+Node cảm biến được xây dựng từ hai thành phần chính: vi điều khiển
+ESP32 và cảm biến DHT11. Sơ đồ kết nối được thể hiện trong
+Hình~\ref{fig:hardware_schematic}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{hardware_schematic}
+  \caption{Sơ đồ kết nối phần cứng node cảm biến}
+  \label{fig:hardware_schematic}
+\end{figure}
+
+Bảng~\ref{tab:gpio_config} liệt kê cấu hình chân kết nối:
+
+\begin{table}[H]
+  \centering
+  \caption{Cấu hình chân kết nối ESP32 --- DHT11}
+  \label{tab:gpio_config}
+  \begin{tabular}{llll}
+    \toprule
+    \textbf{Chân DHT11} & \textbf{Chân ESP32} & \textbf{Chức năng}
+      & \textbf{Ghi chú} \\
+    \midrule
+    VCC  & 3.3V   & Nguồn cấp      & --- \\
+    DATA & GPIO4  & Dữ liệu 1-Wire & Qua điện trở 10k$\Omega$ pull-up \\
+    GND  & GND    & Nối đất        & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsubsection*{b. Cơ chế lưu cấu hình trên Flash}
+
+Mỗi node cần lưu trữ \texttt{api\_key} và cấu hình nhận được từ
+backend qua các lần reset. ESP32 sử dụng thư viện
+\texttt{Preferences.h} để ghi vào vùng NVS (Non-Volatile Storage)
+của Flash:
+
+\begin{lstlisting}[language=C, caption={Lưu và đọc cấu hình định danh từ Flash ESP32}, label={lst:preferences}]
+#include <Preferences.h>
+Preferences prefs;
+
+// Đọc device_id và api_key từ NVS Flash khi khởi động
+void loadCredentials() {
+    prefs.begin("device", true);       // namespace "device", read-only
+    deviceId     = prefs.getInt(   "device_id", -1);
+    deviceApiKey = prefs.getString("api_key",  "");
+    prefs.end();
+}
+
+// Ghi device_id và api_key sau khi nhận từ backend qua MQTT
+void saveCredentials(int newId, String newKey) {
+    prefs.begin("device", false);      // read-write
+    prefs.putInt(   "device_id", newId);
+    prefs.putString("api_key",   newKey);
+    prefs.end();
+}
+// Lưu ý: logic so sánh ngưỡng cảnh báo (temp_high, hum_low...)
+// được thực hiện tập trung ở Backend Node.js (alertService.js),
+// không lưu trên firmware để giảm tải cho vi điều khiển.
+\end{lstlisting}
+
+\subsection{Thiết kế Firmware}
+\label{subsec:design:firmware}
+
+\subsubsection*{a. Kiến trúc firmware phân tầng}
+
+Firmware được tổ chức theo kiến trúc phân tầng như minh họa trong
+Hình~\ref{fig:firmware_arch}. Vòng lặp chính (\texttt{loop()}) điều
+phối ba tác vụ theo chu kỳ: đọc cảm biến, duy trì kết nối MQTT và
+gửi dữ liệu.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{firmware_arch}
+  \caption{Kiến trúc firmware phân tầng của node ESP32}
+  \label{fig:firmware_arch}
+\end{figure}
+
+\subsubsection*{b. Luồng xử lý chính của firmware}
+
+\begin{lstlisting}[language=C, caption={Luồng chính firmware ESP32},
+label={lst:firmware_main}]
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+#include <Preferences.h>
+#include <WiFiManager.h>
+
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define SEND_INTERVAL 5000   // 5 giay
+
+DHT dht(DHTPIN, DHTTYPE);
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+String deviceApiKey = "";
+int    deviceId     = -1;
+bool   provisioned  = false;
+
+void setup() {
+    dht.begin();
+    loadCredentials();  // Doc device_id, api_key tu Flash
+    WiFiManager wm;
+    wm.autoConnect("Sensor-Setup-[MAC]");
+    mqttClient.setServer(MQTT_BROKER, 1883);
+    mqttClient.setCallback(mqttCallback);
+}
+
+void loop() {
+    if (!provisioned) { sendProvisionRequest(); return; }
+    if (!mqttClient.connected()) reconnectWithAuth();
+    mqttClient.loop();
+
+    // Gui du lieu theo chu ky SEND_INTERVAL
+    if (millis() - lastSend >= SEND_INTERVAL) {
+        float temp = dht.readTemperature();
+        float hum  = dht.readHumidity();
+        float aqi  = generateMockAqi(); // Giai lap AQI bang Box-Muller
+
+        if (!isnan(temp) && !isnan(hum)) {
+            publishData(temp, hum, aqi);
+        }
+        lastSend = millis();
+    }
+}
+
+void publishData(float temp, float hum, float aqi) {
+    StaticJsonDocument<128> doc;
+    doc["temperature"] = temp;
+    doc["humidity"]    = hum;
+    doc["aqi"]         = aqi;  // bat buoc cho ML pipeline
+    char payload[128];
+    serializeJson(doc, payload);
+
+    String topic = "device/" + deviceApiKey + "/data";
+    mqttClient.publish(topic.c_str(), payload);
+}
+\end{lstlisting}
+
+\subsubsection*{c. Xử lý message cấu hình từ backend}
+
+Khi nhận cấu hình từ topic \texttt{devices/\{mac\}/config}, callback
+MQTT lưu thông tin định danh thiết bị vào Flash và đặt cờ
+\texttt{provisioned} để chuyển sang chế độ gửi dữ liệu:
+
+\begin{lstlisting}[language=C, caption={Callback xử lý message cấu
+hình MQTT}, label={lst:mqtt_callback}]
+void mqttCallback(char* topic, byte* payload,
+                  unsigned int length) {
+    StaticJsonDocument<256> doc;
+    deserializeJson(doc, payload, length);
+
+    // Xu ly lenh reset tu backend (xoa flash, restart)
+    if (doc["action"] == "reset") {
+        prefs.begin("device", false);
+        prefs.clear(); prefs.end();
+        ESP.restart(); return;
+    }
+
+    // Nhan device_id va api_key tu backend provisioning
+    if (doc.containsKey("device_id") &&
+        doc.containsKey("api_key")) {
+        int    newId  = doc["device_id"].as<int>();
+        String newKey = doc["api_key"].as<String>();
+        saveCredentials(newId, newKey);
+        deviceId     = newId;
+        deviceApiKey = newKey;
+        provisioned  = true;
+    }
+    // Logic kiem tra nguong canh bao (temp_high, hum_low...)
+    // duoc xu ly tap trung tai alertService.js phia Backend,
+    // khong can luu tren firmware.
+}
+\end{lstlisting}
+
+\subsection{Thiết kế cơ sở dữ liệu}
+\label{subsec:design:database}
+
+\subsubsection*{a. Sơ đồ ERD}
+
+Cơ sở dữ liệu PostgreSQL gồm 5 bảng chính, quan hệ được thể hiện
+trong Hình~\ref{fig:erd}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{erd}
+  \caption{Sơ đồ ERD cơ sở dữ liệu PostgreSQL}
+  \label{fig:erd}
+\end{figure}
+
+\subsubsection*{b. Định nghĩa schema}
+
+\begin{lstlisting}[language=SQL, caption={Schema cơ sở dữ liệu
+PostgreSQL}, label={lst:schema}]
+-- Bang nguoi dung
+CREATE TABLE users (
+    id         SERIAL PRIMARY KEY,
+    name       VARCHAR(100),
+    email      VARCHAR(100) UNIQUE NOT NULL,
+    password   VARCHAR(255) NOT NULL,    -- bcrypt hash
+    role       VARCHAR(20) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+-- Bang phong/khu vuc
+CREATE TABLE rooms (
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(100),
+    description   TEXT,
+    center_lat    REAL,       -- Toa do tam phong
+    center_lng    REAL,
+    width_m       REAL,       -- Kich thuoc(met)
+    length_m      REAL,
+    owner_user_id INTEGER REFERENCES users(id),
+    created_at    TIMESTAMP DEFAULT NOW()
+);
+-- Bang thiet bi IoT
+CREATE TABLE devices (
+    id               SERIAL PRIMARY KEY,
+    name             VARCHAR(100),
+    description      TEXT,
+    owner_user_id    INTEGER REFERENCES users(id),
+    api_key          VARCHAR(64) UNIQUE NOT NULL,
+    notify_email     BOOLEAN DEFAULT TRUE,
+    temp_high        REAL DEFAULT 35.0,
+    temp_low         REAL DEFAULT 10.0,
+    hum_high         REAL DEFAULT 80.0,
+    hum_low          REAL DEFAULT 20.0,
+    aqi_high         REAL,
+    aqi_low          REAL,
+    room_id          INTEGER REFERENCES rooms(id),
+    mac_address      VARCHAR(17) UNIQUE,  -- dia chi MAC cua ESP32
+    x                DOUBLE PRECISION,   -- toa do X trong phong (m)
+    y                DOUBLE PRECISION,   -- toa do Y trong phong (m)
+    lat              DOUBLE PRECISION,   -- vi do thuc te (WGS84)
+    lng              DOUBLE PRECISION,   -- kinh do thuc te (WGS84)
+    firmware_version VARCHAR(50),
+    chip_model       VARCHAR(50),
+    created_at       TIMESTAMP DEFAULT NOW()
+);
+-- Bang du lieu cam bien
+CREATE TABLE readings (
+    id          SERIAL PRIMARY KEY,
+    device_id   INTEGER REFERENCES devices(id),
+    temperature REAL NOT NULL,
+    humidity    REAL NOT NULL,
+    aqi         REAL NOT NULL DEFAULT 0,  -- chi so chat luong KK
+    timestamp   TIMESTAMP DEFAULT NOW()
+);
+-- Index tang toc truy van chuoi thoi gian
+CREATE INDEX idx_readings_device_time
+    ON readings(device_id, timestamp DESC);
+-- Bang canh bao
+CREATE TABLE alerts (
+    id              SERIAL PRIMARY KEY,
+    device_id       INTEGER REFERENCES devices(id),
+    type            VARCHAR(50),   -- 'temp_high', 'hum_low', 'aqi_high'...
+    value           REAL,          -- Gia tri vuot nguong
+    message         TEXT,
+    acknowledged_by INTEGER REFERENCES users(id),
+    acknowledged_at TIMESTAMP,
+    timestamp       TIMESTAMP DEFAULT NOW()
+);
+\end{lstlisting}
+
+\subsubsection*{c. Mối quan hệ giữa các bảng}
+
+\begin{itemize}[leftmargin=2cm]
+  \item \texttt{users} $\to$ \texttt{devices}: Một người dùng có thể
+    sở hữu nhiều thiết bị. Mỗi thiết bị thuộc một người dùng.
+  \item \texttt{users} $\to$ \texttt{rooms}: Một người dùng có thể
+    quản lý nhiều phòng.
+  \item \texttt{rooms} $\to$ \texttt{devices}: Một phòng có thể chứa
+    nhiều node cảm biến. Mỗi node được gán vào một phòng.
+  \item \texttt{devices} $\to$ \texttt{readings}: Quan hệ một-nhiều,
+    mỗi thiết bị sinh ra nhiều bản ghi theo thời gian.
+  \item \texttt{devices} $\to$ \texttt{alerts}: Cảnh báo được tạo tự
+    động khi dữ liệu của thiết bị vượt ngưỡng cài đặt.
+\end{itemize}
+
+\subsection{Thiết kế Backend API}
+\label{subsec:design:backend}
+
+\subsubsection*{a. Cấu trúc API endpoints}
+
+Backend Node.js/Express cung cấp RESTful API với prefix
+\texttt{/api}. Tất cả endpoint (trừ auth) yêu cầu JWT trong header
+\texttt{Authorization: Bearer \{token\}}.
+
+\begin{table}[H]
+  \centering
+  \caption{API endpoints quản lý xác thực và người dùng}
+  \label{tab:api_auth}
+  \begin{tabularx}{\textwidth}{p{1.5cm} p{5cm} X}
+    \toprule
+    \textbf{Method} & \textbf{Endpoint} & \textbf{Mô tả} \\
+    \midrule
+    POST & \texttt{/api/auth/register} & Đăng ký tài khoản mới \\
+    POST & \texttt{/api/auth/login}    & Đăng nhập, nhận JWT \\
+    GET  & \texttt{/api/users/me}      & Lấy thông tin người dùng hiện tại \\
+    PUT  & \texttt{/api/users/me}      & Cập nhật thông tin cá nhân \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{API endpoints quản lý thiết bị và phòng}
+  \label{tab:api_devices}
+  \begin{tabularx}{\textwidth}{p{1.5cm} p{4.5cm} X}
+    \toprule
+    \textbf{Method} & \textbf{Endpoint} & \textbf{Mô tả} \\
+    \midrule
+    GET    & \texttt{/api/devices}         & Danh sách thiết bị của user \\
+    POST   & \texttt{/api/devices}         & Tạo thiết bị mới (Admin) \\
+    GET    & \texttt{/api/devices/:id}     & Chi tiết một thiết bị \\
+    PUT    & \texttt{/api/devices/:id}     & Cập nhật cấu hình/ngưỡng \\
+    DELETE & \texttt{/api/devices/:id}     & Xóa thiết bị \\
+    GET    & \texttt{/api/rooms}           & Danh sách phòng \\
+    POST   & \texttt{/api/rooms}           & Tạo phòng mới \\
+    PUT    & \texttt{/api/rooms/:id}       & Cập nhật thông tin phòng \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{API endpoints dữ liệu cảm biến, dự báo và cảnh báo}
+  \label{tab:api_data}
+  \begin{tabularx}{\textwidth}{p{1.5cm} p{5cm} X}
+    \toprule
+    \textbf{Method} & \textbf{Endpoint} & \textbf{Mô tả} \\
+    \midrule
+    GET & \texttt{/api/data}              & Lịch sử dữ liệu theo \texttt{device\_id}, \texttt{start}, \texttt{end} \\
+    GET & \texttt{/api/forecast}          & Gọi FastAPI LSTM, trả về 15 giá trị dự báo \\
+    GET & \texttt{/api/spatial-forecast}  & Gọi FastAPI Kriging, trả về lưới 40$\times$50 \\
+    GET & \texttt{/api/alerts}            & Danh sách cảnh báo (lọc theo device, thời gian) \\
+    PUT & \texttt{/api/alerts/:id/ack}    & Xác nhận (acknowledge) một cảnh báo \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsubsection*{b. Cơ chế xác thực JWT}
+
+\begin{lstlisting}[language=JavaScript, caption={Middleware xác thực
+JWT}, label={lst:jwt_middleware}]
+// middleware/auth.js
+const jwt = require('jsonwebtoken');
+module.exports = (req, res, next) => {
+    const authHeader = req.headers['authorization'];
+    if (!authHeader) return res.status(401)
+        .json({ error: 'Missing token' });
+    const token = authHeader.split(' ')[1]; // Bearer <token>
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded;   // { id, email, role }
+        next();
+    } catch (err) {
+        return res.status(403).json({ error: 'Invalid token' });
+    }
+};
+\end{lstlisting}
+
+\subsubsection*{c. Dịch vụ cảnh báo (alertService)}
+
+\begin{lstlisting}[language=JavaScript, caption={Logic kiem tra nguong canh bao}, label={lst:alert_service}]
+// services/alertService.js
+async function check(device, reading) {
+    const { temperature, humidity } = reading;
+    const alerts = [];
+
+    if (temperature > device.temp_high)
+        alerts.push({ type: 'temp_high', value: temperature,
+            message: `Nhiet do ${temperature}C vuot nguong ${device.temp_high}C` });
+            
+    if (temperature < device.temp_low)
+        alerts.push({ type: 'temp_low', value: temperature,
+            message: `Nhiet do ${temperature}C duoi nguong ${device.temp_low}C` });
+            
+    if (humidity > device.hum_high)
+        alerts.push({ type: 'hum_high', value: humidity,
+            message: `Do am ${humidity}% vuot nguong ${device.hum_high}%` });
+            
+    if (humidity < device.hum_low)
+        alerts.push({ type: 'hum_low', value: humidity,
+            message: `Do am ${humidity}% duoi nguong ${device.hum_low}%` });
+            
+    for (const alert of alerts) {
+        // Luu vao DB
+        await db.query(
+            `INSERT INTO alerts
+             (device_id, type, value, message, timestamp)
+             VALUES ($1,$2,$3,$4,NOW())`,
+            [device.id, alert.type,
+             alert.value, alert.message]);
+             
+        // Gui email neu thiet bi bat notify
+        if (device.notify_email)
+            await emailService.sendAlert(device, alert);
+    }
+}
+\end{lstlisting}
+
+\subsection{Thiết kế và huấn luyện mô hình Machine Learning}
+\label{subsec:design:ml}
+
+\subsubsection*{a. Chuẩn bị dữ liệu}
+
+Dữ liệu huấn luyện được thu thập từ hệ thống trong quá trình vận hành
+thử nghiệm, lưu trữ trong bảng \texttt{readings}. Quy trình chuẩn bị
+dữ liệu gồm các bước:
+
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Truy vấn:} Lấy toàn bộ dữ liệu từ PostgreSQL theo
+    thứ tự thời gian tăng dần.
+  \item \textbf{Kiểm tra missing values:} Bỏ qua các bản ghi có giá
+    trị \texttt{NULL} hoặc nằm ngoài dải hợp lệ (nhiệt độ: $-10$ đến
+    $60^\circ$C, độ ẩm: $0$ đến $100$\%).
+  \item \textbf{Chuẩn hóa:} Áp dụng \texttt{MinMaxScaler}
+    (scikit-learn) để đưa tất cả giá trị về khoảng $[0, 1]$. Lưu
+    scaler vào \texttt{scaler.pkl} để tái dùng khi inference.
+  \item \textbf{Tạo chuỗi (sliding window):} Với mỗi vị trí $t$,
+    tạo cặp $(X_t, y_t)$ trong đó $X_t$ là ma trận $30 \times 3$
+    (30 bước quá khứ, 3 features: nhiệt độ, độ ẩm, AQI) và $y_t$ là ma trận $15 \times 3$
+    (15 bước tương lai cần dự báo).
+  \item \textbf{Chia tập:} 80\% dữ liệu cho huấn luyện, 20\% cho
+    kiểm thử.
+\end{enumerate}
+
+\subsubsection*{b. Kiến trúc mô hình LSTM}
+
+Bảng~\ref{tab:lstm_arch} mô tả kiến trúc mô hình LSTM được sử dụng
+trong đồ án.
+
+\begin{table}[H]
+  \centering
+  \caption{Kiến trúc mô hình LSTM}
+  \label{tab:lstm_arch}
+  \begin{tabular}{lllr}
+    \toprule
+    \textbf{Layer} & \textbf{Loại} & \textbf{Tham số} &
+    \textbf{Output shape} \\
+    \midrule
+    Input   & ---          & ---
+      & $(batch, 30, 3)$ \\
+    LSTM 1  & LSTM         & hidden=64, dropout=0.3
+      & $(batch, 30, 64)$ \\
+    LSTM 2  & LSTM         & hidden=64, dropout=0.3
+      & $(batch, 64)$ \\
+    Linear  & Fully connected & in=64, out=$15 \times 3$
+      & $(batch, 45)$ \\
+    Reshape & ---          & ---
+      & $(batch, 15, 3)$ \\
+    \bottomrule
+    \multicolumn{3}{l}{\textit{Tổng số tham số:}}
+      & \textit{$\approx$68.000} \\
+  \end{tabular}
+\end{table}
+
+\subsubsection*{c. Huấn luyện và đánh giá}
+
+Mô hình được huấn luyện với các siêu tham số:
+
+\begin{table}[H]
+  \centering
+  \caption{Siêu tham số huấn luyện mô hình LSTM}
+  \label{tab:lstm_hyperparams}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Siêu tham số} & \textbf{Giá trị} \\
+    \midrule
+    Optimizer      & Adam ($lr = 10^{-3}$) \\
+    Loss function  & MSELoss \\
+    Batch size     & 32 \\
+    Số epoch tối đa& 100 \\
+    Early stopping & patience = 10 epoch \\
+    Dropout        & 0.3 (áp dụng giữa các LSTM layer) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Kết quả huấn luyện thể hiện qua loss curve lưu tại
+\texttt{lstm\_train/loss\_curve.png} (ngắn hạn) và
+\texttt{loss\_curve\_long.png} (dài hạn). Đồ thị cho thấy training
+loss và validation loss hội tụ ổn định, không có hiện tượng overfitting
+rõ rệt nhờ cơ chế dropout và early stopping.
+
+\subsection{Thiết kế Dashboard (Frontend)}
+\label{subsec:design:frontend}
+
+\subsubsection*{a. Sơ đồ điều hướng trang}
+
+Hình~\ref{fig:nav_diagram} mô tả sơ đồ điều hướng giữa các trang
+trong React dashboard. Trang Login là điểm vào bắt buộc; sau khi xác
+thực thành công, người dùng được chuyển đến Dashboard chính.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{nav_diagram}
+  \caption{Sơ đồ điều hướng các trang trong React dashboard}
+  \label{fig:nav_diagram}
+\end{figure}
+
+Các trang chính trong ứng dụng:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Login / Register:} Xác thực người dùng, lưu JWT vào
+    localStorage.
+  \item \textbf{Dashboard (trang chủ):} Hiển thị tổng quan tất cả
+    node, biểu đồ realtime nhiệt độ, độ ẩm và AQI cập nhật qua Socket.io.
+  \item \textbf{Trang thiết bị:} Danh sách node, cấu hình ngưỡng
+    cảnh báo, xem biểu đồ lịch sử và dự báo LSTM cho từng node.
+  \item \textbf{Trang dự báo (Forecast):} Gồm hai chế độ xem được
+    chuyển đổi bằng tab: (1) \textbf{Single Device} --- biểu đồ dự
+    báo chuỗi thời gian LSTM cho từng node theo các mốc 6/10/15 phút
+    (ngắn hạn) và 1/3/6/12/24 giờ (dài hạn); (2) \textbf{Spatial} ---
+    bản đồ heatmap Kriging/IDW phân bố môi trường không gian theo
+    phòng, render trên Leaflet.
+  \item \textbf{Trang cảnh báo:} Danh sách alert, bộ lọc theo thời
+    gian, chức năng acknowledge.
+  \item \textbf{Trang quản lý phòng:} Tạo và cấu hình phòng, gán
+    node vào phòng, cài đặt tọa độ.
+\end{itemize}
+
+\subsubsection*{b. Thiết kế giao diện người dùng}
+
+Hình~\ref{fig:ui_dashboard} và Hình~\ref{fig:ui_heatmap} minh họa
+thiết kế giao diện của hai màn hình chính.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{ui_dashboard}
+  \caption{Giao diện Dashboard chính hiển thị dữ liệu realtime}
+  \label{fig:ui_dashboard}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{system_spatial_forecast}
+  \caption{Giao diện chức năng dự báo không gian (Spatial Forecast)}
+  \label{fig:ui_heatmap}
+\end{figure}
+
+%------------------------------------------------------------
+\section{Xây dựng hệ thống}
+\label{sec:design:impl}
+%------------------------------------------------------------
+
+\subsection{Thư viện và công cụ sử dụng}
+\label{subsec:design:tools}
+
+\begin{table}[H]
+  \centering
+  \caption{Danh sách thư viện và công cụ sử dụng}
+  \label{tab:tools}
+  \begin{tabularx}{\textwidth}{p{2.5cm} p{3.5cm} p{2cm} X}
+    \toprule
+    \textbf{Mục đích} & \textbf{Thư viện/Công cụ}
+      & \textbf{Phiên bản} & \textbf{Ghi chú} \\
+    \midrule
+    Firmware IDE  & Arduino IDE     & 2.x     & Biên dịch C++ ESP32 \\
+    MQTT Client   & PubSubClient    & 2.8     & MQTT trên ESP32 \\
+    JSON (FW)     & ArduinoJson     & 6.x     & Đóng gói payload \\
+    Cảm biến      & DHT sensor lib  & 1.4     & Đọc DHT11 \\
+    Backend FW    & Node.js         & 18 LTS  & Runtime JavaScript \\
+    Web framework & Express         & 4.x     & REST API \\
+    MQTT Broker   & Aedes           & 0.50    & Broker tích hợp \\
+    Realtime      & Socket.io       & 4.x     & WebSocket server \\
+    Database      & PostgreSQL      & 15      & RDBMS chính \\
+    ORM/Query     & node-postgres   & 8.x     & PostgreSQL client \\
+    Auth          & jsonwebtoken    & 9.x     & JWT \\
+    Password      & bcrypt          & 5.x     & Hash mật khẩu \\
+    Email         & nodemailer      & 6.x     & Gửi cảnh báo \\
+    ML Framework  & PyTorch         & 2.x     & Huấn luyện LSTM \\
+    ML API        & FastAPI         & 0.110   & Serve ML inference \\
+    Nội suy       & pykrige         & 1.7     & Kriging \\
+    Nội suy       & scipy           & 1.12    & IDW \\
+    Scaler        & scikit-learn    & 1.4     & MinMaxScaler \\
+    Frontend      & React           & 19      & UI framework \\
+    Build tool    & Vite            & 5.x     & Bundler \\
+    Biểu đồ       & Chart.js        & 4.x     & Vẽ biểu đồ \\
+    Bản đồ        & Leaflet         & 1.9     & Render heatmap \\
+    Quản lý mã    & Git / GitHub    & ---     & Version control \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Kết quả đạt được}
+\label{subsec:design:result}
+
+Sau quá trình thiết kế và triển khai, đồ án đã xây dựng thành công hệ
+thống hoàn chỉnh với đầy đủ các thành phần hoạt động ổn định. Kết quả
+cụ thể từng thành phần:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Node cảm biến ESP32:} Hoạt động ổn định, đọc và gửi
+    dữ liệu định kỳ 5 giây qua MQTT. Cơ chế tự động reconnect đảm bảo
+    node phục hồi kết nối sau khi mất mạng mà không cần can thiệp thủ
+    công.
+  \item \textbf{Backend Node.js:} Tiếp nhận và xử lý dữ liệu từ nhiều
+    node đồng thời. MQTT broker Aedes và Socket.io hoạt động ổn định
+    trong cùng tiến trình. API trả về kết quả trong thời gian trung
+    bình dưới 100ms cho các truy vấn dữ liệu thông thường.
+  \item \textbf{FastAPI ML service:} Inference LSTM hoàn thành trong
+    dưới 200ms cho một node (window 30, horizon 15). Kriging tính toán
+    lưới 40$\times$50 trong khoảng 1--2 giây tùy số lượng node.
+  \item \textbf{Dashboard React:} Biểu đồ Chart.js cập nhật realtime
+    khi nhận event Socket.io, không cần tải lại trang. Heatmap Leaflet
+    render đúng và trực quan trên các trình duyệt hiện đại.
+  \item \textbf{Mô hình LSTM:} Huấn luyện hội tụ tốt trên tập dữ liệu
+    thu thập được. Loss curve thể hiện xu hướng giảm đều và ổn định
+    giữa training loss và validation loss.
+\end{itemize}
+
+Một số ảnh tiêu biểu được chọn để chèn trực tiếp trong nội dung báo cáo, minh họa toàn bộ các giao diện chức năng của hệ thống[cite: 122, 136].
+
+% CỤM 1: Xác thực & Quản lý thiết bị (STT 1 - 4)
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_login.jpg}
+    \caption{Màn hình đăng nhập}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_register.jpg}
+    \caption{Màn hình đăng ký}
+  \end{subfigure}
+
+  \vspace{0.4cm}
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_devices.jpg}
+    \caption{Danh sách thiết bị IoT}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_devices_setting.jpg}
+    \caption{Cấu hình ngưỡng cảnh báo}
+  \end{subfigure}
+  \caption{Giao diện chức năng hệ thống --- Đăng nhập, đăng ký và quản lý thiết bị}
+  \label{fig:system_demo_part1}
+\end{figure}
+
+% CỤM 2: Dashboard & Chi tiết thiết bị (STT 5 - 8)
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_dashboard.jpg}
+    \caption{Dashboard tổng quan}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_devices_detail_chart.jpg}
+    \caption{Biểu đồ chi tiết thiết bị (Live Chart)}
+  \end{subfigure}
+
+  \vspace{0.4cm}
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_devices_detail_history.jpg}
+    \caption{Lịch sử dữ liệu cảm biến}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_devices_detail_alert.jpg}
+    \caption{Lịch sử cảnh báo của thiết bị}
+  \end{subfigure}
+  \caption{Giao diện chức năng hệ thống --- Dashboard và các tab chi tiết thiết bị}
+  \label{fig:system_demo_part2}
+\end{figure}
+
+% CỤM 3: Dự báo & Quản lý không gian, Cảnh báo hệ thống (STT 9 - 13)
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_forecast.jpg}
+    \caption{Dự báo chuỗi thời gian LSTM}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_spatial_forecast.jpg}
+    \caption{Heatmap không gian}
+  \end{subfigure}
+
+  \vspace{0.4cm}
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_rooms.jpg}
+    \caption{Quản lý danh sách phòng}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_rooms_config.jpg}
+    \caption{Cấu hình kích thước và vị trí node}
+  \end{subfigure}
+
+  \vspace{0.4cm}
+  \begin{subfigure}{0.48\textwidth}
+    \centering
+    \includegraphics[width=\textwidth]{system_alerts.jpg}
+    \caption{Danh sách cảnh báo hệ thống}
+  \end{subfigure}
+  \caption{Giao diện dự báo thời gian/không gian, quản lý phòng và cảnh báo hệ thống}
+  \label{fig:system_demo_part3}
+\end{figure}
+
+\subsection{Minh họa các chức năng chính}
+\label{subsec:design:demo}
+
+\textbf{Chức năng 1 --- Đăng ký node IoT tự động:} Khi node ESP32
+khởi động lần đầu, hệ thống tự động cấp phát \texttt{api\_key} qua
+MQTT mà không cần thao tác thủ công từ phía người dùng. Node sẵn sàng
+gửi dữ liệu trong vòng vài giây sau khi kết nối Wi-Fi thành công.
+
+\textbf{Chức năng 2 --- Giám sát realtime:} Biểu đồ nhiệt độ và độ
+ẩm trên dashboard cập nhật tức thì mỗi khi node gửi dữ liệu mới qua
+Socket.io, không cần tải lại trang. Người dùng có thể theo dõi nhiều
+node cùng lúc trên cùng giao diện.
+
+\textbf{Chức năng 3 --- Dự báo chuỗi thời gian:} Người dùng chọn node
+và khoảng thời gian, hệ thống trả về biểu đồ dự báo 15 bước tiếp theo
+(màu khác để phân biệt với dữ liệu lịch sử). Thời gian phản hồi từ
+khi nhấn nút đến khi hiện kết quả dưới 3 giây.
+
+\textbf{Chức năng 4 --- Heatmap phân bố không gian:} Từ dữ liệu của
+các node trong phòng, hệ thống render heatmap nhiệt độ/độ ẩm phủ lên
+bản đồ sàn phòng. Gradient màu từ xanh lam (mát/khô) đến đỏ
+(nóng/ẩm) giúp người dùng nhận biết vùng bất thường trực quan.
+
+\textbf{Chức năng 5 --- Cảnh báo tự động:} Khi nhiệt độ hoặc độ ẩm
+vượt ngưỡng cài đặt, hệ thống tự động ghi alert, hiển thị thông báo
+trên dashboard và gửi email đến người dùng trong vòng 30 giây.
+
+%------------------------------------------------------------
+\section{Kiểm thử}
+\label{sec:design:test}
+%------------------------------------------------------------
+
+Kiểm thử được thực hiện theo phương pháp hộp đen (black-box), tập
+trung vào đầu vào và đầu ra quan sát được mà không xét cấu trúc nội
+bộ mã nguồn.
+
+\begin{table}[H]
+  \centering
+  \caption{Kiểm thử chức năng đăng ký và kết nối node IoT}
+  \label{tab:test_register}
+  \begin{tabularx}{\textwidth}{p{4cm} X p{1.5cm}}
+    \toprule
+    \textbf{Trường hợp kiểm thử} & \textbf{Kết quả mong đợi}
+      & \textbf{Kết quả} \\
+    \midrule
+    Node mới kết nối lần đầu
+      & Backend tạo bản ghi device, sinh \texttt{api\_key}, gửi config
+        về node qua MQTT
+      & Đạt \\
+    Node đã tồn tại kết nối lại
+      & Backend trả về cấu hình hiện có, không tạo bản ghi mới
+      & Đạt \\
+    Wi-Fi mất kết nối giữa chừng
+      & Node tự động reconnect sau 5 giây
+      & Đạt \\
+    \texttt{api\_key} không hợp lệ
+      & Backend bỏ qua message, ghi log cảnh báo
+      & Đạt \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Kiểm thử chức năng thu thập và hiển thị dữ liệu realtime}
+  \label{tab:test_realtime}
+  \begin{tabularx}{\textwidth}{p{4cm} X p{1.5cm}}
+    \toprule
+    \textbf{Trường hợp kiểm thử} & \textbf{Kết quả mong đợi}
+      & \textbf{Kết quả} \\
+    \midrule
+    Node gửi dữ liệu bình thường
+      & Dashboard cập nhật biểu đồ trong dưới 2 giây
+      & Đạt \\
+    DHT11 trả về NaN (lỗi đọc)
+      & Firmware bỏ qua chu kỳ đó, thử lại sau 5 giây
+      & Đạt \\
+    Nhiều node gửi đồng thời
+      & Tất cả dữ liệu được lưu đúng, không bị mất
+      & Đạt \\
+    Client mở nhiều tab cùng lúc
+      & Mỗi tab nhận đúng dữ liệu của node đang subscribe
+      & Đạt \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Kiểm thử chức năng dự báo và heatmap}
+  \label{tab:test_forecast}
+  \begin{tabularx}{\textwidth}{p{4cm} X p{1.5cm}}
+    \toprule
+    \textbf{Trường hợp kiểm thử} & \textbf{Kết quả mong đợi}
+      & \textbf{Kết quả} \\
+    \midrule
+    Yêu cầu dự báo khi đủ 30 bản ghi
+      & FastAPI trả về mảng 15 giá trị, dashboard hiển thị đúng
+      & Đạt \\
+    Yêu cầu dự báo khi chưa đủ 30 bản ghi
+      & API trả về lỗi 400 kèm thông báo rõ ràng
+      & Đạt \\
+    FastAPI service bị dừng
+      & Backend Node.js trả về lỗi 503, không crash
+      & Đạt \\
+    Heatmap với 1 node duy nhất
+      & Hệ thống sinh node ảo bù biên, render được heatmap
+      & Đạt \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\begin{table}[H]
+  \centering
+  \caption{Kiểm thử chức năng cảnh báo}
+  \label{tab:test_alert}
+  \begin{tabularx}{\textwidth}{p{4cm} X p{1.5cm}}
+    \toprule
+    \textbf{Trường hợp kiểm thử} & \textbf{Kết quả mong đợi}
+      & \textbf{Kết quả} \\
+    \midrule
+    Nhiệt độ vượt ngưỡng cao
+      & Alert được tạo trong DB, email gửi đến người dùng
+      & Đạt \\
+    Độ ẩm dưới ngưỡng thấp
+      & Alert được tạo, hiển thị trên dashboard
+      & Đạt \\
+    Xác nhận (acknowledge) alert
+      & Alert được đánh dấu đã xử lý, không gửi email lần nữa
+      & Đạt \\
+    Tắt tính năng notify\_email
+      & Alert vẫn ghi DB nhưng không gửi email
+      & Đạt \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+%------------------------------------------------------------
+\section{Triển khai}
+\label{sec:design:deploy}
+%------------------------------------------------------------
+
+\subsection{Môi trường triển khai}
+\label{subsec:design:deploy:env}
+
+Hệ thống được triển khai và kiểm thử trong môi trường phòng lab với
+cấu hình cụ thể như sau:
+
+\begin{table}[H]
+  \centering
+  \caption{Cấu hình môi trường triển khai}
+  \label{tab:deploy_env}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Thành phần} & \textbf{Cấu hình} \\
+    \midrule
+    Máy chủ Backend     & Máy tính cá nhân / Laptop \\
+    Hệ điều hành        & Ubuntu 22.04 LTS / Windows 11 (WSL2) \\
+    Node.js             & v18 LTS \\
+    Python              & 3.10+ \\
+    PostgreSQL          & v15, chạy local \\
+    Node IoT            & ESP32 DevKit v1 + DHT11 \\
+    Mạng                & Wi-Fi LAN cùng subnet \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Hướng dẫn khởi động hệ thống}
+\label{subsec:design:deploy:guide}
+
+Quy trình khởi động hệ thống theo thứ tự:
+
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Khởi động PostgreSQL} và chạy script tạo bảng
+    (\texttt{schema.sql}).
+  \item \textbf{Khởi động Backend Node.js:}
+\begin{lstlisting}[language=bash, label={lst:start_backend}]
+cd server && npm install
+cp .env.example .env   # Cau hinh DB, JWT_SECRET, email
+node index.js
+\end{lstlisting}
+
+  \item \textbf{Khởi động hai FastAPI ML service (chạy đồng thời):}
+\begin{lstlisting}[language=bash, label={lst:start_fastapi}]
+cd forecast
+# Service 1: LSTM time-series forecast (cong 8000)
+cd time_forecast
+uvicorn main:app --port 8000 --reload &
+
+# Service 2: LSTM + Kriging spatial forecast (cong 8001)
+cd ..
+uvicorn spatial_forecast:app --port 8001 --reload
+\end{lstlisting}
+
+  \item \textbf{Khởi động Frontend:}
+\begin{lstlisting}[language=bash, label={lst:start_frontend}]
+cd frontend && npm install
+npm run dev   # Development
+npm run build && npm run preview   # Production
+\end{lstlisting}
+
+  \item \textbf{Nạp firmware lên ESP32:} Mở
+    \texttt{sensor/sensor.ino} trong Arduino IDE, cấu hình
+    \texttt{WIFI\_SSID}, \texttt{WIFI\_PASSWORD} và
+    \texttt{MQTT\_BROKER} (địa chỉ IP máy chủ), nạp firmware.
+  \item \textbf{Kiểm tra:} Mở trình duyệt tại
+    \texttt{http://localhost:5173}, đăng ký tài khoản, xem node
+    tự động xuất hiện trong danh sách thiết bị.
+\end{enumerate}
+
+\subsection{Script mô phỏng node IoT}
+\label{subsec:design:deploy:simulate}
+
+Để kiểm thử hệ thống mà không cần phần cứng thực, đồ án cung cấp
+script mô phỏng \texttt{scripts/simulate\_esp32.js}:
+
+\begin{lstlisting}[language=JavaScript, caption={Script mô phỏng node
+ESP32 bằng Node.js}, label={lst:simulate}]
+// scripts/simulate_esp32.js
+const mqtt = require('mqtt');
+const client = mqtt.connect('mqtt://localhost:1883');
+
+const API_KEY = 'your-api-key-here';
+const TOPIC   = `device/${API_KEY}/data`;
+setInterval(() => {
+    // Sinh dữ liệu ngẫu nhiên trong dải thực tế
+    const payload = JSON.stringify({
+        temperature: (20 + Math.random() * 15).toFixed(1),
+        humidity:    (40 + Math.random() * 40).toFixed(1),
+        aqi:         (30 + Math.random() * 70).toFixed(1)  // bat buoc cho ML
+    });
+    client.publish(TOPIC, payload);
+    console.log(`Published: ${payload}`);
+}, 5000);
+\end{lstlisting}
+
+Script này cho phép kiểm thử toàn bộ pipeline từ MQTT đến dashboard
+mà không cần thiết bị ESP32 vật lý.

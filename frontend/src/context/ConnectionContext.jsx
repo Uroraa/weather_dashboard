@@ -33,6 +33,18 @@ function emptyChartData() {
                 fill: true,
                 tension: 0.4,
                 yAxisID: 'y1'
+            },
+            {
+                label: 'AQI',
+                data: Array(MAX_DATA_POINTS).fill(null),
+                borderColor: '#38a169',
+                backgroundColor: 'rgba(56, 161, 105, 0.1)',
+                borderWidth: 3,
+                pointRadius: 0,
+                pointHoverRadius: 6,
+                fill: true,
+                tension: 0.4,
+                yAxisID: 'y2'
             }
         ]
     };
@@ -53,6 +65,7 @@ export function ConnectionProvider({ children }) {
     const [chartData, setChartData] = useState(emptyChartData);
     const [liveTemp, setLiveTemp] = useState('--');
     const [liveHumidity, setLiveHumidity] = useState('--');
+    const [liveAqi, setLiveAqi] = useState('--');
     const [liveUpdateKey, setLiveUpdateKey] = useState(0);
 
     const socketRef = useRef(null);
@@ -111,6 +124,7 @@ export function ConnectionProvider({ children }) {
         setChartData(emptyChartData());
         setLiveTemp('--');
         setLiveHumidity('--');
+        setLiveAqi('--');
         markDeviceOffline(selectedDevice);
 
         // Seed chart from DB so data is available immediately (covers reload too)
@@ -131,17 +145,20 @@ export function ConnectionProvider({ children }) {
                 const labels = [...Array(padLen).fill(''), ...readings.map(r => new Date(r.timestamp).toLocaleTimeString())].slice(-MAX_DATA_POINTS);
                 const temps  = [...Array(padLen).fill(null),  ...readings.map(r => r.temperature)].slice(-MAX_DATA_POINTS);
                 const hums   = [...Array(padLen).fill(null),  ...readings.map(r => r.humidity)].slice(-MAX_DATA_POINTS);
+                const aqis   = [...Array(padLen).fill(null),  ...readings.map(r => r.aqi)].slice(-MAX_DATA_POINTS);
                 setChartData(prev => ({
                     ...prev,
                     labels,
                     datasets: [
                         { ...prev.datasets[0], data: temps },
-                        { ...prev.datasets[1], data: hums }
+                        { ...prev.datasets[1], data: hums },
+                        { ...prev.datasets[2], data: aqis }
                     ]
                 }));
                 const last = readings[readings.length - 1];
                 setLiveTemp(Number(last.temperature).toFixed(1));
                 setLiveHumidity(Math.round(Number(last.humidity)).toString());
+                setLiveAqi(Math.round(Number(last.aqi)).toString());
             })
             .catch(() => {});
 
@@ -161,25 +178,29 @@ export function ConnectionProvider({ children }) {
             markDeviceOnline(selectedDevice, reading.source);
             setLiveTemp(Number(reading.temperature).toFixed(1));
             setLiveHumidity(Math.round(Number(reading.humidity)).toString());
+            setLiveAqi(Math.round(Number(reading.aqi)).toString());
             setLiveUpdateKey(k => k + 1);
 
             setChartData(prev => {
                 const labels = [...prev.labels];
                 const temps  = [...prev.datasets[0].data];
                 const hums   = [...prev.datasets[1].data];
+                const aqis   = [...prev.datasets[2].data];
 
-                labels.shift(); temps.shift(); hums.shift();
+                labels.shift(); temps.shift(); hums.shift(); aqis.shift();
 
                 labels.push(new Date(reading.timestamp || Date.now()).toLocaleTimeString());
                 temps.push(reading.temperature);
                 hums.push(reading.humidity);
+                aqis.push(reading.aqi);
 
                 return {
                     ...prev,
                     labels,
                     datasets: [
                         { ...prev.datasets[0], data: temps },
-                        { ...prev.datasets[1], data: hums }
+                        { ...prev.datasets[1], data: hums },
+                        { ...prev.datasets[2], data: aqis }
                     ]
                 };
             });
@@ -210,6 +231,7 @@ export function ConnectionProvider({ children }) {
             chartData,
             liveTemp,
             liveHumidity,
+            liveAqi,
             liveUpdateKey,
         }}>
             {children}

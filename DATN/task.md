@@ -1,0 +1,6 @@
+- [x] Cập nhật `chapter2.tex` (sửa cổng FastAPI trong UC03 từ 8001 thành 8000)
+- [x] Cập nhật `chapter3.tex` (sửa cơ chế lưu Flash và làm rõ 2 dịch vụ FastAPI cổng 8000 & 8001)
+- [x] Cập nhật `chapter4.tex` (thay thế ảnh `ui_heatmap` thành `system_spatial_forecast`, sắp xếp lại 3 cụm ảnh giao diện gom theo nhóm liên quan)
+- [x] Cập nhật `chapter5.tex` (thay thế ảnh `heatmap_demo` thành `system_spatial_forecast`, thêm trường `aqi` vào Listing 5.4 và Listing 5.6)
+- [x] Tạo tài liệu `plantuml_diagrams.md` chứa mã PlantUML chuẩn hóa cho các sơ đồ b, c, d, e, f
+- [x] Xác minh và biên dịch thử nghiệm tài liệu LaTeX

@@ -58,6 +58,15 @@ async function initializeDb() {
                 temp_low REAL,
                 hum_high REAL,
                 hum_low REAL,
+                aqi_high REAL,
+                aqi_low REAL,
+                mac_address VARCHAR(17) UNIQUE,
+                x DOUBLE PRECISION,
+                y DOUBLE PRECISION,
+                lat DOUBLE PRECISION,
+                lng DOUBLE PRECISION,
+                firmware_version VARCHAR(50),
+                chip_model VARCHAR(50),
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
         `);
@@ -66,6 +75,15 @@ async function initializeDb() {
         await pool.query(`
             ALTER TABLE devices 
             ADD COLUMN IF NOT EXISTS room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS aqi_high REAL;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS aqi_low REAL;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS mac_address VARCHAR(17) UNIQUE;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS x DOUBLE PRECISION;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS y DOUBLE PRECISION;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS firmware_version VARCHAR(50);
+            ALTER TABLE devices ADD COLUMN IF NOT EXISTS chip_model VARCHAR(50);
         `);
 
         await pool.query(`
@@ -74,8 +92,13 @@ async function initializeDb() {
                 device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
                 temperature REAL NOT NULL,
                 humidity REAL NOT NULL,
+                aqi REAL NOT NULL DEFAULT 0,
                 timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
             );
+        `);
+
+        await pool.query(`
+            ALTER TABLE readings ADD COLUMN IF NOT EXISTS aqi REAL NOT NULL DEFAULT 0;
         `);
 
         await pool.query(`
@@ -120,8 +143,8 @@ async function seedDatabase() {
 
             const apiKey = uuidv4();
             const devRes = await pool.query(
-                `INSERT INTO devices (name, description, owner_user_id, api_key, temp_high, temp_low, hum_high, hum_low) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-                ['Office Sensor', 'ESP32 located in the main office', userId, apiKey, 30, 15, 80, 20]
+                `INSERT INTO devices (name, description, owner_user_id, api_key, temp_high, temp_low, hum_high, hum_low, aqi_high, aqi_low) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id`,
+                ['Office Sensor', 'ESP32 located in the main office', userId, apiKey, 30, 15, 80, 20, 150, 0]
             );
             const deviceId = devRes.rows[0].id;
             console.log(`[SEED] Dummy device created. API_KEY: ${apiKey}`);
@@ -131,9 +154,10 @@ async function seedDatabase() {
                 const pastTime = new Date(now.getTime() - i * 60000);
                 const temp = 20 + Math.random() * 5;
                 const hum = 40 + Math.random() * 20;
+                const aqi = 40 + Math.random() * 30;
                 await pool.query(
-                    `INSERT INTO readings (device_id, temperature, humidity, timestamp) VALUES ($1, $2, $3, $4)`,
-                    [deviceId, temp.toFixed(1), hum.toFixed(1), pastTime.toISOString()]
+                    `INSERT INTO readings (device_id, temperature, humidity, aqi, timestamp) VALUES ($1, $2, $3, $4, $5)`,
+                    [deviceId, temp.toFixed(1), hum.toFixed(1), aqi.toFixed(1), pastTime.toISOString()]
                 );
             }
             console.log("Database seeded successfully!");
