@@ -23,7 +23,13 @@ Chất lượng không khí trong các không gian kín như văn phòng, phòng
 nhà xưởng và tòa nhà thương mại đang nhận được sự quan tâm ngày càng
 tăng. Theo các nghiên cứu, con người dành trung bình hơn 90\% thời gian
 trong nhà, trong khi chất lượng không khí trong nhà có thể kém hơn
-ngoài trời từ 2 đến 5 lần~\cite{who2021air}. Nhiệt độ và độ ẩm là hai
+ngoài trời từ 2 đến 5 lần~\cite{who2021air}. Sự phát triển của các mạng lưới
+cảm biến thông minh dựa trên IoT đã mở ra các hướng tiếp cận giám sát liên
+tục với độ phân giải không gian cao~\cite{saini2020indoor}. Hơn nữa, việc sử
+dụng các cảm biến chi phí thấp (LCS - Low-cost sensors) giúp phân tán mật độ
+trạm đo đạc tốt hơn, tuy nhiên lại đi kèm thách thức về sai số tích lũy và yêu cầu
+phải có quy trình hiệu chuẩn chặt chẽ để đảm bảo độ tin cậy của dữ liệu thu
+thập~\cite{kumar2015rise,margaritis2021calibration}. Nhiệt độ và độ ẩm là hai
 thông số cơ bản nhưng có ảnh hưởng trực tiếp đến sức khỏe, năng suất
 làm việc và sự phát triển của vi sinh vật trong không gian.
 
@@ -58,13 +64,13 @@ sánh các nhóm giải pháp tiêu biểu.
     \toprule
     Tiêu chí
       & Trạm quan trắc nhà nước
-      & Thiết bị thương mại (Xiaomi, SenseAir)
+      & Thiết bị thương mại (Xiaomi, IQAir)
       & Giải pháp DIY / Nghiên cứu \\
     \midrule
     Chi phí
-      & Rất cao (>100 triệu/trạm)
-      & Trung bình (500k--5 triệu/node)
-      & Thấp (<500k/node) \\
+      & Rất cao (vài tỷ--hàng chục tỷ VNĐ/trạm)
+      & Trung bình (1,5 triệu--10 triệu VNĐ/thiết bị)
+      & Thấp (<500k VNĐ/node) \\
     Mật độ triển khai
       & Thưa thớt
       & Vừa phải
@@ -89,12 +95,7 @@ sánh các nhóm giải pháp tiêu biểu.
   \end{tabularx}
 \end{table}
 
-Các sản phẩm thương mại như Xiaomi Mi Air Monitor hay các cảm biến
-SenseAir tuy có giao diện đẹp và dễ sử dụng, nhưng hoạt động trong hệ
-sinh thái đóng, không cho phép tích hợp pipeline ML tùy chỉnh hay trực
-quan hóa phân bố không gian. Các trạm quan trắc nhà nước có độ chính
-xác cao nhưng chi phí vận hành rất lớn và mật độ quá thưa để phục vụ
-giám sát trong không gian kín.
+Các sản phẩm thương mại tiêu biểu như dòng máy đo của Xiaomi~\cite{xiaomi_air_detector}, thiết bị Qingping Air Monitor~\cite{qingping_air_monitor}, hay thiết bị đo cao cấp IQAir AirVisual Pro~\cite{iqair_airvisual_specs} tích hợp các cảm biến chuyên dụng như SenseAir CO2~\cite{senseair_s8_datasheet} tuy có thiết kế đẹp, hiển thị trực quan và dễ sử dụng cho người tiêu dùng cá nhân, nhưng hoạt động hoàn toàn trong hệ sinh thái đóng. Chúng không cho phép lập trình viên can thiệp vào firmware, tích hợp các pipeline học máy tùy biến để dự báo, hoặc liên kết dữ liệu giữa nhiều node để trực quan hóa bản đồ phân bố không gian theo thời gian thực. Đối với các trạm quan trắc tự động, liên tục của nhà nước, việc thiết lập và vận hành phải tuân thủ nghiêm ngặt theo các tiêu chuẩn kỹ thuật quy định bởi Bộ Tài nguyên và Môi trường~\cite{monre_circular_10}. Các trạm này tuy có độ chính xác và độ tin cậy rất cao nhờ các cảm biến chuẩn công nghiệp, nhưng chi phí đầu tư hạ tầng cực kỳ đắt đỏ, thường dao động từ vài tỷ đến hàng chục tỷ đồng cho mỗi trạm (ví dụ như dự án xây dựng mạng lưới quan trắc quốc gia giai đoạn 1 có tổng mức đầu tư lên tới 515 tỷ đồng cho 18 trạm cùng thiết bị phụ trợ~\cite{monre_air_monitoring_project}). Do chi phí lớn, mật độ lắp đặt các trạm này rất thưa thớt, chủ yếu đặt ở các nút giao thông hoặc khu công nghiệp lớn ngoài trời và hoàn toàn không thể sử dụng để giám sát chất lượng môi trường chi tiết bên trong các phòng học hay tòa nhà văn phòng. Từ đó, nhu cầu phát triển các giải pháp nghiên cứu tự thiết kế (DIY) dựa trên các nền tảng vi điều khiển chi phí thấp kết hợp với thuật toán dự báo chuỗi thời gian và nội suy không gian đã trở thành xu hướng nghiên cứu quan trọng và thiết thực~\cite{Zheng2019,belavadi2020air}.
 
 \subsection{Xu hướng công nghệ AIoT trong quan trắc môi trường}
 \label{subsec:survey:trend}

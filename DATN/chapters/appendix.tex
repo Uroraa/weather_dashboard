@@ -1,0 +1,313 @@
+%============================================================
+% PHỤ LỤC: MÃ NGUỒN QUAN TRỌNG
+%============================================================
+\chapter{PHỤ LỤC: MÃ NGUỒN QUAN TRỌNG}
+\label{chap:appendix}
+
+Phần phụ lục này lưu trữ mã nguồn chi tiết của các thành phần cốt lõi trong hệ thống AIoT giám sát và dự báo chất lượng không khí, phục vụ mục đích tham khảo kỹ thuật.
+
+\section{Mã nguồn Firmware ESP32}
+
+\begin{lstlisting}[language=C, caption={Luồng xử lý chính của Firmware ESP32}, label={lst:firmware_main}]
+// sensor/sensor.ino (Luoc trich phan vong lap chinh)
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <DHT.h>
+#include <Preferences.h>
+#include <WiFiManager.h>
+
+#define DHTPIN 4
+#define DHTTYPE DHT11
+#define SEND_INTERVAL 5000   // 5 giay
+
+DHT dht(DHTPIN, DHTTYPE);
+WiFiClient wifiClient;
+PubSubClient mqttClient(wifiClient);
+
+String deviceApiKey = "";
+int    deviceId     = -1;
+bool   provisioned  = false;
+
+void setup() {
+    dht.begin();
+    loadCredentials();  // Doc device_id, api_key tu Flash
+    WiFiManager wm;
+    wm.autoConnect("Sensor-Setup-[MAC]");
+    mqttClient.setServer(MQTT_BROKER, 1883);
+    mqttClient.setCallback(mqttCallback);
+}
+
+void loop() {
+    if (!provisioned) { sendProvisionRequest(); return; }
+    if (!mqttClient.connected()) reconnectWithAuth();
+    mqttClient.loop();
+
+    // Gui du lieu theo chu ky SEND_INTERVAL
+    if (millis() - lastSend >= SEND_INTERVAL) {
+        float temp = dht.readTemperature();
+        float hum  = dht.readHumidity();
+        float aqi  = generateMockAqi(); // Gia lap AQI
+
+        if (!isnan(temp) && !isnan(hum)) {
+            publishData(temp, hum, aqi);
+        }
+        lastSend = millis();
+    }
+}
+
+void publishData(float temp, float hum, float aqi) {
+    StaticJsonDocument<128> doc;
+    doc["temperature"] = temp;
+    doc["humidity"]    = hum;
+    doc["aqi"]         = aqi;
+    char payload[128];
+    serializeJson(doc, payload);
+
+    String topic = "device/" + deviceApiKey + "/data";
+    mqttClient.publish(topic.c_str(), payload);
+}
+\end{lstlisting}
+
+\section{Cấu trúc Cơ sở dữ liệu và Dịch vụ Cảnh báo Backend}
+
+\begin{lstlisting}[language=SQL, caption={Schema cơ sở dữ liệu PostgreSQL}, label={lst:schema}]
+-- Bang nguoi dung
+CREATE TABLE users (
+    id         SERIAL PRIMARY KEY,
+    name       VARCHAR(100),
+    email      VARCHAR(100) UNIQUE NOT NULL,
+    password   VARCHAR(255) NOT NULL,    -- bcrypt hash
+    role       VARCHAR(20) DEFAULT 'user',
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Bang phong/khu vuc
+CREATE TABLE rooms (
+    id            SERIAL PRIMARY KEY,
+    name          VARCHAR(100),
+    description   TEXT,
+    center_lat    REAL,
+    center_lng    REAL,
+    width_m       REAL,
+    length_m      REAL,
+    owner_user_id INTEGER REFERENCES users(id),
+    created_at    TIMESTAMP DEFAULT NOW()
+);
+
+-- Bang thiet bi IoT
+CREATE TABLE devices (
+    id               SERIAL PRIMARY KEY,
+    name             VARCHAR(100),
+    description      TEXT,
+    owner_user_id    INTEGER REFERENCES users(id),
+    api_key          VARCHAR(64) UNIQUE NOT NULL,
+    notify_email     BOOLEAN DEFAULT TRUE,
+    temp_high        REAL DEFAULT 35.0,
+    temp_low         REAL DEFAULT 10.0,
+    hum_high         REAL DEFAULT 80.0,
+    hum_low          REAL DEFAULT 20.0,
+    aqi_high         REAL,
+    aqi_low          REAL,
+    room_id          INTEGER REFERENCES rooms(id),
+    mac_address      VARCHAR(17) UNIQUE,
+    x                DOUBLE PRECISION,
+    y                DOUBLE PRECISION,
+    lat              DOUBLE PRECISION,
+    lng              DOUBLE PRECISION,
+    firmware_version VARCHAR(50),
+    chip_model       VARCHAR(50),
+    created_at       TIMESTAMP DEFAULT NOW()
+);
+
+-- Bang du lieu cam bien
+CREATE TABLE readings (
+    id          SERIAL PRIMARY KEY,
+    device_id   INTEGER REFERENCES devices(id),
+    temperature REAL NOT NULL,
+    humidity    REAL NOT NULL,
+    aqi         REAL NOT NULL DEFAULT 0,
+    timestamp   TIMESTAMP DEFAULT NOW()
+);
+
+-- Index tang toc truy van chuoi thoi gian
+CREATE INDEX idx_readings_device_time
+    ON readings(device_id, timestamp DESC);
+
+-- Bang canh bao
+CREATE TABLE alerts (
+    id              SERIAL PRIMARY KEY,
+    device_id       INTEGER REFERENCES devices(id),
+    type            VARCHAR(50),
+    value           REAL,
+    message         TEXT,
+    acknowledged_by INTEGER REFERENCES users(id),
+    acknowledged_at TIMESTAMP,
+    timestamp       TIMESTAMP DEFAULT NOW()
+);
+\end{lstlisting}
+
+\begin{lstlisting}[language=JavaScript, caption={Logic dịch vụ kiểm tra ngưỡng cảnh báo (Backend Node.js)}, label={lst:alert_service}]
+// server/services/alertService.js
+async function check(device, reading) {
+    const { temperature, humidity } = reading;
+    const alerts = [];
+
+    if (temperature > device.temp_high)
+        alerts.push({ type: 'temp_high', value: temperature,
+            message: `Nhiet do ${temperature}C vuot nguong ${device.temp_high}C` });
+            
+    if (temperature < device.temp_low)
+        alerts.push({ type: 'temp_low', value: temperature,
+            message: `Nhiet do ${temperature}C duoi nguong ${device.temp_low}C` });
+            
+    if (humidity > device.hum_high)
+        alerts.push({ type: 'hum_high', value: humidity,
+            message: `Do am ${humidity}% vuot nguong ${device.hum_high}%` });
+            
+    if (humidity < device.hum_low)
+        alerts.push({ type: 'hum_low', value: humidity,
+            message: `Do am ${humidity}% duoi nguong ${device.hum_low}%` });
+            
+    for (const alert of alerts) {
+        // Luu vao DB
+        await db.query(
+            `INSERT INTO alerts
+             (device_id, type, value, message, timestamp)
+             VALUES ($1,$2,$3,$4,NOW())`,
+            [device.id, alert.type,
+             alert.value, alert.message]);
+             
+        // Gui email neu thiet bi bat thong bao
+        if (device.notify_email)
+            await emailService.sendAlert(device, alert);
+    }
+}
+\end{lstlisting}
+
+\section{Mã nguồn Python Machine Learning Service}
+
+\begin{lstlisting}[language=Python, caption={Quy trình huấn luyện mô hình dự báo LSTM}, label={lst:lstm_train}]
+# lstm_train/train.py (Trich doan quy trinh)
+import torch
+import torch.nn as nn
+from sklearn.preprocessing import MinMaxScaler
+import joblib
+
+# 1. Load data from PostgreSQL
+data = query("SELECT temperature, humidity, aqi FROM readings ORDER BY timestamp")
+
+# 2. Min-Max normalization, save scaler for inference reuse
+scaler = MinMaxScaler()
+data_scaled = scaler.fit_transform(data)
+joblib.dump(scaler, 'scaler.pkl')
+
+# 3. Create (X, y) pairs using sliding window
+X, y = create_sequences(data_scaled, window=30, horizon=15)
+
+# 4. Define LSTM architecture (PyTorch)
+class LSTMModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.lstm = nn.LSTM(input_size=3,
+                            hidden_size=64,
+                            num_layers=2,
+                            batch_first=True,
+                            dropout=0.3)  # Da cap nhat dropout=0.3
+        self.fc = nn.Linear(64, 15 * 3)
+
+    def forward(self, x):
+        out, _ = self.lstm(x)
+        return self.fc(out[:, -1, :]).view(-1, 15, 3)
+
+# 5. Train with Adam optimizer, MSE loss
+model = LSTMModel()
+optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+criterion = nn.MSELoss()
+
+for epoch in range(num_epochs):
+    pred = model(X_train)
+    loss = criterion(pred, y_train)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+# 6. Save model weights
+torch.save(model.state_dict(), 'lstm_model.pth')
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python, caption={Phục vụ suy luận mô hình LSTM qua FastAPI Service}, label={lst:lstm_infer}]
+# forecast/time_forecast/main.py (Phan API inference)
+from fastapi import FastAPI, Depends
+import torch
+import joblib
+
+model = LSTMModel()
+model.load_state_dict(torch.load('lstm_model.pth'))
+model.eval()
+scaler = joblib.load('scaler.pkl')
+
+@app.get("/forecast")
+async def forecast(device_id: int, db=Depends(get_db)):
+    # 1. Fetch 30 latest records from PostgreSQL
+    rows = await db.fetch(
+        "SELECT temperature, humidity, aqi FROM readings WHERE device_id=$1 ORDER BY timestamp DESC LIMIT 30", device_id)
+
+    # 2. Normalize using saved scaler
+    data = scaler.transform(rows)
+
+    # 3. Create input tensor
+    X = torch.tensor(data).unsqueeze(0).float()
+
+    # 4. Inference (no_grad to save memory)
+    with torch.no_grad():
+        pred = model(X)
+
+    # 5. Inverse transform to real values
+    result = scaler.inverse_transform(pred.squeeze(0).numpy())
+
+    return {"forecast": result.tolist()}
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python, caption={Thuật toán nội suy không gian địa thống kê Kriging/IDW}, label={lst:spatial}]
+# forecast/spatial_forecast.py
+from pykrige.ok import OrdinaryKriging
+import numpy as np
+
+def spatial_forecast(nodes: list[dict], room: dict):
+    # 1. Create virtual nodes at 4 room corners via IDW
+    corners = get_room_corners(room)
+    virtual_nodes = [idw_estimate(c, nodes) for c in corners]
+    all_nodes = nodes + virtual_nodes
+
+    # 2. Extract coordinates and values
+    lats = [n["lat"] for n in all_nodes]
+    lngs = [n["lng"] for n in all_nodes]
+    temps = [n["temperature"] for n in all_nodes]
+    hums  = [n["humidity"]    for n in all_nodes]
+
+    # 3. Create 40x50 target grid
+    grid_lat = np.linspace(min(lats), max(lats), 40)
+    grid_lng = np.linspace(min(lngs), max(lngs), 50)
+
+    # 4. Kriging interpolation for temperature
+    ok_temp = OrdinaryKriging(
+        lngs, lats, temps,
+        variogram_model='gaussian',
+        verbose=False, enable_plotting=False)
+    z_temp, _ = ok_temp.execute('grid', grid_lng, grid_lat)
+
+    # 5. Kriging interpolation for humidity
+    ok_hum = OrdinaryKriging(
+        lngs, lats, hums,
+        variogram_model='gaussian',
+        verbose=False, enable_plotting=False)
+    z_hum, _ = ok_hum.execute('grid', grid_lng, grid_lat)
+
+    return {
+        "grid_lat": grid_lat.tolist(),
+        "grid_lng": grid_lng.tolist(),
+        "temperature_grid": z_temp.tolist(),
+        "humidity_grid":    z_hum.tolist()
+    }
+\end{lstlisting}

@@ -192,30 +192,22 @@ không gian.
 Phần còn lại của báo cáo đồ án tốt nghiệp này được tổ chức như sau:
 
 \textbf{Chương~\ref{chap:survey}} đi vào khảo sát yêu cầu thực tế của
-bài toán thông qua phân tích các hệ thống quan trắc môi trường hiện có.
-Trên cơ sở khảo sát, các chức năng cốt lõi của hệ thống được xác định
-và biểu diễn qua biểu đồ use case kèm đặc tả chức năng chi tiết.
-
-\textbf{Chương~\ref{chap:tech}} giới thiệu các công nghệ và công cụ
-được lựa chọn sử dụng trong đồ án, bao gồm: vi điều khiển ESP32 và cảm
-biến DHT11, giao thức MQTT, framework Node.js/Express, PostgreSQL, mô
-hình LSTM (PyTorch), FastAPI, các thuật toán nội suy không gian
-Kriging/IDW, và React với Leaflet.
+bài toán thông qua phân tích các hệ thống quan trắc môi trường hiện có, tích
+hợp các nghiên cứu liên quan và các nguồn tài liệu ngoài đầy đủ. Trên cơ sở
+khảo sát, các chức năng cốt lõi của hệ thống được xác định và biểu diễn qua
+biểu đồ use case kèm đặc tả chi tiết.
 
 \textbf{Chương~\ref{chap:design}} trình bày chi tiết quá trình thiết
-kế và triển khai hệ thống: kiến trúc tổng thể bốn tầng, thiết kế
-firmware ESP32, sơ đồ cơ sở dữ liệu PostgreSQL, quy trình huấn luyện
-và triển khai mô hình LSTM, thiết kế FastAPI service, và giao diện
-dashboard. Chương cũng bao gồm kết quả kiểm thử và thông tin triển
-khai.
+kế và triển khai hệ thống, bao gồm phân tích lựa chọn công nghệ đi kèm chi tiết
+về từng cấu phần triển khai phần cứng, thiết kế firmware, thiết kế cơ sở dữ
+liệu, thiết kế API backend, mô hình học sâu dự báo và trực quan hóa dashboard.
 
-\textbf{Chương~\ref{chap:contribution}} tập trung làm nổi bật ba giải
-pháp kỹ thuật đặc sắc: pipeline dự báo chuỗi thời gian LSTM phục vụ
-qua FastAPI, cơ chế nội suy không gian Kriging/IDW để tạo heatmap thời
-gian thực, và kiến trúc truyền thông MQTT kết hợp Socket.io đảm bảo độ
-trễ thấp cho toàn hệ thống.
+\textbf{Chương~\ref{chap:contribution}} tập trung vào đánh giá hệ thống thông qua kết
+quả thực tế, các thử nghiệm kiểm thử chức năng và đánh giá chi tiết ba giải
+pháp kỹ thuật nổi bật: pipeline dự báo chuỗi thời gian LSTM phục vụ qua API độc
+lập, cơ chế nội suy không gian Kriging/IDW tạo bản đồ nhiệt thời gian thực,
+và hạ tầng truyền thông tối ưu hóa độ trễ qua MQTT kết hợp WebSockets.
 
 \textbf{Chương~\ref{chap:conclusion}} tổng kết quá trình thực hiện đề
 tài, đánh giá kết quả đạt được so với mục tiêu ban đầu và đề xuất các
-hướng phát triển trong tương lai, bao gồm mở rộng cảm biến, cải thiện
-độ chính xác mô hình dự báo và nâng cấp hạ tầng triển khai.
+hướng phát triển trong tương lai nhằm nâng cấp và hoàn thiện hệ thống.

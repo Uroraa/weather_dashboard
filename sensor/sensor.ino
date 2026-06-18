@@ -189,6 +189,7 @@ void setup() {
     wm.setSaveConfigCallback(saveConfigCallback);
     WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
     wm.addParameter(&custom_mqtt_server);
+    wm.setTimeout(20); // portal timeout in seconds
 
     String mac = getMacAddress();
     mac.replace(":", "");

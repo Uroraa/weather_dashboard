@@ -1,94 +1,188 @@
 %============================================================
-% CHƯƠNG 3: CÔNG NGHỆ SỬ DỤNG
+% CHƯƠNG 3: THIẾT KẾ VÀ TRIỂN KHAI HỆ THỐNG
 %============================================================
-\chapter{CÔNG NGHỆ SỬ DỤNG}
-\label{chap:tech}
+\chapter{THIẾT KẾ VÀ TRIỂN KHAI HỆ THỐNG}
+\label{chap:design}
 
-Chương này trình bày các công nghệ và công cụ cốt lõi được lựa chọn
-sử dụng trong đồ án, bao gồm phần cứng thiết bị IoT, nền tảng phần
-mềm cho firmware và backend, mô hình học máy cho dữ liệu chuỗi thời
-gian, thuật toán nội suy không gian và giao diện người dùng. Với mỗi
-công nghệ, trọng tâm là lý do lựa chọn và vai trò cụ thể trong kiến
-trúc hệ thống.
+Chương này trình bày toàn bộ quá trình thiết kế và xây dựng hệ thống
+AIoT giám sát và dự báo chất lượng không khí. Nội dung bao gồm thiết
+kế kiến trúc tổng thể theo mô hình bốn tầng, thiết kế chi tiết từng
+thành phần tích hợp chặt chẽ với các phân tích lựa chọn công nghệ tương ứng (vi
+điều khiển, cảm biến, giao thức truyền thông, cơ sở dữ liệu, backend, mô hình dự
+báo học sâu và giao diện trực quan), kết quả xây dựng hệ thống và quy
+trình triển khai chi tiết.
 
 %------------------------------------------------------------
-\section{Phần cứng}
-\label{sec:tech:hardware}
+\section{Thiết kế kiến trúc}
+\label{sec:design:arch}
 %------------------------------------------------------------
 
-\subsection{Vi điều khiển ESP32}
-\label{subsec:tech:esp32}
+\subsection{Lựa chọn kiến trúc phần mềm}
+\label{subsec:design:arch:choice}
 
-ESP32 là dòng vi điều khiển (SoC) do Espressif Systems phát triển,
-tích hợp bộ xử lý lõi kép Xtensa LX6 32-bit hoạt động ở tần số lên
-đến 240~MHz, cùng với Wi-Fi 802.11 b/g/n và Bluetooth 4.2/BLE trên
-cùng một chip~\cite{espressif2024esp32}. Các thông số kỹ thuật quan
-trọng bao gồm 520~KB SRAM, hỗ trợ Flash ngoài thông thường 4--16~MB,
-và đầy đủ các giao tiếp ngoại vi như I2C, SPI, UART, ADC, DAC.
+Hệ thống được thiết kế theo \textbf{kiến trúc bốn tầng} kết hợp mô
+hình IoT Gateway, thể hiện trong Hình~\ref{fig:arch_overview}. Kiến
+trúc này phân tách rõ ràng trách nhiệm của từng tầng, đảm bảo khả năng
+mở rộng độc lập và dễ bảo trì:
 
-\textbf{Lý do lựa chọn cho đồ án:}
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Tầng thu thập (Edge Layer):} Node cảm biến đọc dữ liệu và gửi lên qua kết nối mạng không dây. Tầng này hoạt động hoàn toàn tự động, không cần can thiệp người dùng sau khi cấu hình ban đầu.
+  \item \textbf{Tầng truyền dẫn (Transport Layer):} Giao thức truyền thông nhẹ đảm bảo truyền dữ liệu nhanh, độ trễ thấp và hỗ trợ nhiều node đồng thời.
+  \item \textbf{Tầng xử lý và lưu trữ (Backend Layer):} Hệ thống máy chủ trung tâm xử lý nghiệp vụ, cơ sở dữ liệu lưu trữ dữ liệu chuỗi thời gian, và các API microservice chạy mô hình học sâu suy luận và thuật toán nội suy không gian.
+  \item \textbf{Tầng hiển thị (Presentation Layer):} Giao diện Web Dashboard nhận dữ liệu và cập nhật trực quan realtime dưới dạng biểu đồ và bản đồ nhiệt.
+\end{enumerate}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{arch_overview}
+  \caption{Kiến trúc tổng quan của hệ thống AIoT giám sát và dự báo chất lượng không khí}
+  \label{fig:arch_overview}
+\end{figure}
+
+Lý do lựa chọn kiến trúc này so với các phương án khác:
 
 \begin{itemize}[leftmargin=2cm]
-  \item \textbf{Tích hợp Wi-Fi sẵn:} Cho phép kết nối MQTT trực tiếp
-    đến broker mà không cần module truyền thông bổ sung, giảm chi phí
-    và độ phức tạp phần cứng.
-  \item \textbf{Chi phí thấp:} Giá thành module ESP32 trên thị trường
-    Việt Nam khoảng 50.000--80.000 VND, phù hợp triển khai nhiều node.
-  \item \textbf{Hệ sinh thái phong phú:} Được hỗ trợ đầy đủ bởi
-    Arduino IDE với thư viện MQTT (\texttt{PubSubClient}), JSON
-    (\texttt{ArduinoJson}) và cảm biến DHT đã trưởng thành.
-  \item \textbf{Bộ nhớ Flash đủ dùng:} \texttt{Preferences.h} cho
-    phép lưu cấu hình định danh (\texttt{device\_id}, \texttt{api\_key} và địa chỉ \texttt{mqtt\_server}) vào Flash
-    bền vững qua các lần reset.
+  \item \textbf{So với kiến trúc monolithic:} Việc tách riêng dịch vụ Machine Learning độc lập khỏi máy chủ backend chính giúp đảm bảo hiệu năng xử lý, tránh block luồng chạy chính khi chạy suy luận nặng.
+  \item \textbf{So với kiến trúc serverless:} Hệ thống cần duy trì kết nối truyền thông liên tục và tức thời (realtime), không phù hợp với mô hình stateless của serverless.
+  \item \textbf{So với Cloud-only:} Broker tích hợp trực tiếp trong backend giúp giảm bớt một hop mạng trung gian, từ đó giảm thiểu độ trễ truyền dữ liệu đầu cuối.
 \end{itemize}
 
-\subsection{Cảm biến DHT11}
-\label{subsec:tech:dht11}
+\subsection{Thiết kế tổng quan các gói}
+\label{subsec:design:arch:packages}
 
-DHT11 là cảm biến kỹ thuật số đo nhiệt độ và độ ẩm tương đối sử dụng
-giao tiếp 1-Wire~\cite{dht11datasheet}. Thông số kỹ thuật chính:
+Hình~\ref{fig:package_diagram} mô tả biểu đồ phụ thuộc gói tổng quan
+của hệ thống, phân chia thành bốn nhóm chính tương ứng với bốn tầng
+kiến trúc.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\textwidth]{package_diagram}
+  \caption{Biểu đồ phụ thuộc gói tổng quan của hệ thống}
+  \label{fig:package_diagram}
+\end{figure}
+
+Cấu trúc thư mục dự án phản ánh trực tiếp kiến trúc này:
+
+\begin{itemize}[leftmargin=2cm]
+  \item \texttt{sensor/} --- Firmware thiết bị vi điều khiển (C/C++)
+  \item \texttt{server/} --- Backend chính điều phối nghiệp vụ (JavaScript)
+    \begin{itemize}
+      \item \texttt{controllers/} --- Xử lý HTTP request
+      \item \texttt{routes/} --- Định nghĩa API endpoint
+      \item \texttt{services/} --- Logic nghiệp vụ (cảnh báo, kết nối truyền thông, dự báo)
+      \item \texttt{middleware/} --- Xác thực, phân quyền bảo mật
+      \item \texttt{models/} --- Giao tiếp cơ sở dữ liệu
+    \end{itemize}
+  \item \texttt{lstm\_train/} --- Pipeline Machine Learning (huấn luyện, suy luận và nội suy)
+  \item \texttt{frontend/src/} --- Mã nguồn giao diện Web Dashboard (React)
+    \begin{itemize}
+      \item \texttt{pages/} --- Các màn hình chức năng chính
+      \item \texttt{components/} --- Các thành phần UI dùng lại
+      \item \texttt{context/} --- Quản lý trạng thái toàn cục
+    \end{itemize}
+\end{itemize}
+
+%------------------------------------------------------------
+\section{Thiết kế chi tiết}
+\label{sec:design:detail}
+%------------------------------------------------------------
+
+\subsection{Thiết kế phần cứng node cảm biến}
+\label{subsec:design:hardware}
+
+\subsubsection*{a. Lựa chọn và đặc tả chi tiết linh kiện phần cứng}
+
+Node cảm biến được thiết kế dựa trên sự kết hợp giữa hiệu năng xử lý, khả năng kết nối mạng không dây và tối ưu hóa chi phí triển khai thực tế.
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Vi điều khiển ESP32:} ESP32 là dòng vi điều khiển (SoC) do Espressif Systems phát triển, tích hợp bộ xử lý lõi kép Xtensa LX6 32-bit hoạt động ở tần số lên đến 240~MHz, cùng với Wi-Fi 802.11 b/g/n và Bluetooth 4.2/BLE trên cùng một chip~\cite{espressif2024esp32}. Các thông số kỹ thuật quan trọng bao gồm 520~KB SRAM, hỗ trợ Flash ngoài thông thường 4--16~MB, và đầy đủ các giao tiếp ngoại vi như I2C, SPI, UART, ADC, DAC.
+  
+  \textit{Lý do lựa chọn cho đồ án:}
+  \begin{itemize}
+    \item \textbf{Tích hợp Wi-Fi sẵn:} Cho phép kết nối MQTT trực tiếp đến broker mà không cần module truyền thông bổ sung, giảm chi phí và độ phức tạp phần cứng.
+    \item \textbf{Chi phí thấp:} Giá thành module ESP32 trên thị trường Việt Nam khoảng 50.000--80.000 VND, phù hợp triển khai nhiều node.
+    \item \textbf{Hệ sinh thái phong phú:} Được hỗ trợ đầy đủ bởi Arduino IDE với thư viện MQTT (\texttt{PubSubClient}), JSON (\texttt{ArduinoJson}) và cảm biến DHT đã trưởng thành.
+    \item \textbf{Bộ nhớ Flash đủ dùng:} Thư viện \texttt{Preferences.h} cho phép lưu cấu hình định danh (\texttt{device\_id}, \texttt{api\_key} và địa chỉ \texttt{mqtt\_server}) vào Flash bền vững qua các lần reset.
+  \end{itemize}
+
+  \item \textbf{Cảm biến DHT11:} DHT11 là cảm biến kỹ thuật số đo nhiệt độ và độ ẩm tương đối sử dụng giao tiếp 1-Wire~\cite{dht11datasheet}. Thông số kỹ thuật chính được thể hiện ở Bảng~\ref{tab:dht11_spec}.
+  
+  \begin{table}[H]
+    \centering
+    \caption{Thông số kỹ thuật cảm biến DHT11}
+    \label{tab:dht11_spec}
+    \begin{tabular}{lll}
+      \toprule
+      \textbf{Thông số} & \textbf{Giá trị} & \textbf{Đơn vị} \\
+      \midrule
+      Dải đo nhiệt độ   & 0 - 50          & $^\circ$C       \\
+      Độ chính xác nhiệt độ & $\pm$2       & $^\circ$C       \\
+      Dải đo độ ẩm      & 20 - 80         & \%RH            \\
+      Độ chính xác độ ẩm & $\pm$5          & \%RH            \\
+      Điện áp hoạt động & 3.3 - 5         & V               \\
+      Giao tiếp         & 1-Wire (Digital) & -             \\
+      Tần suất lấy mẫu  & 1                & lần/giây tối đa \\
+      \bottomrule
+    \end{tabular}
+  \end{table}
+
+  DHT11 được lựa chọn vì giá thành rất thấp (khoảng 15.000--25.000 VND), dễ kết nối với ESP32 qua một chân digital duy nhất (GPIO4 trong đồ án), và thư viện \texttt{DHT.h} đã ổn định, dễ tích hợp. Mặc dù độ chính xác không bằng DHT22, DHT11 đủ đáp ứng yêu cầu của hệ thống quan trắc môi trường prototype trong phạm vi đồ án.
+\end{itemize}
+
+\subsubsection*{b. Sơ đồ kết nối phần cứng}
+
+Node cảm biến kết nối cảm biến DHT11 trực tiếp tới một chân đầu vào kỹ thuật số (GPIO4) của ESP32 qua điện trở kéo lên (pull-up) $10\text{k}\Omega$ để đảm bảo tính ổn định của đường truyền 1-Wire. Sơ đồ kết nối chi tiết được minh họa trong Hình~\ref{fig:hardware_schematic}.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.7\textwidth]{hardware_schematic}
+  \caption{Sơ đồ kết nối phần cứng node cảm biến}
+  \label{fig:hardware_schematic}
+\end{figure}
+
+Bảng~\ref{tab:gpio_config} liệt kê cấu hình chân kết nối:
 
 \begin{table}[H]
   \centering
-  \caption{Thông số kỹ thuật cảm biến DHT11}
-  \label{tab:dht11_spec}
-  \begin{tabular}{lll}
+  \caption{Cấu hình chân kết nối ESP32 --- DHT11}
+  \label{tab:gpio_config}
+  \begin{tabular}{llll}
     \toprule
-    \textbf{Thông số} & \textbf{Giá trị} & \textbf{Đơn vị} \\
+    \textbf{Chân DHT11} & \textbf{Chân ESP32} & \textbf{Chức năng}
+      & \textbf{Ghi chú} \\
     \midrule
-    Dải đo nhiệt độ   & 0 - 50          & $^\circ$C       \\
-    Độ chính xác nhiệt độ & $\pm$2       & $^\circ$C       \\
-    Dải đo độ ẩm      & 20 - 80         & \%RH            \\
-    Độ chính xác độ ẩm & $\pm$5          & \%RH            \\
-    Điện áp hoạt động & 3.3 - 5         & V               \\
-    Giao tiếp         & 1-Wire (Digital) & -             \\
-    Tần suất lấy mẫu  & 1                & lần/giây tối đa \\
+    VCC  & 3.3V   & Nguồn cấp      & --- \\
+    DATA & GPIO4  & Dữ liệu 1-Wire & Qua điện trở 10k$\Omega$ pull-up \\
+    GND  & GND    & Nối đất        & --- \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-DHT11 được lựa chọn vì giá thành rất thấp (khoảng 15.000--25.000 VND),
-dễ kết nối với ESP32 qua một chân digital duy nhất (GPIO4 trong đồ án),
-và thư viện \texttt{DHT.h} đã ổn định, dễ tích hợp. Mặc dù độ chính
-xác không bằng DHT22, DHT11 đủ đáp ứng yêu cầu của hệ thống quan trắc
-môi trường prototype trong phạm vi đồ án.
+\subsubsection*{c. Cơ chế lưu cấu hình định danh trên Flash}
 
-%------------------------------------------------------------
-\section{Giao thức truyền thông}
-\label{sec:tech:protocol}
-%------------------------------------------------------------
+Để node cảm biến hoạt động tự động sau khi khởi động lại hoặc mất nguồn điện, thiết bị cần lưu trữ mã khóa xác thực định danh (\texttt{api\_key}) và cấu hình nhận từ máy chủ. Chúng tôi sử dụng thư viện \texttt{Preferences.h} của ESP32 để ghi dữ liệu trực tiếp vào phân vùng NVS (Non-Volatile Storage) trên bộ nhớ Flash. Thuật toán đọc và ghi cấu hình được mô tả dưới dạng mã giả ở mã nguồn giải thuật bên dưới:
 
-\subsection{MQTT}
-\label{subsec:tech:mqtt}
+\begin{lstlisting}[language=C, caption={Giai thuat luu va doc cau hinh dinh danh tren Flash}, label={lst:preferences_pseudo}]
+Ham docCauHinhTuFlash()
+    Mo vung luu tru "device" o che do chi doc (read-only)
+    deviceId = Doc gia tri so nguyen voi khoa "device_id" (mac dinh = -1)
+    deviceApiKey = Doc chuoi ky tu voi khoa "api_key" (mac dinh = "")
+    Dong vung luu tru
+Ket thuc Ham
 
-MQTT (Message Queuing Telemetry Transport) là giao thức truyền thông
-nhẹ theo mô hình publish/subscribe, được thiết kế đặc biệt cho các
-thiết bị IoT có tài nguyên hạn chế và kết nối không ổn định~%
-\cite{banks2014mqtt}. MQTT hoạt động trên nền TCP/IP với overhead
-header tối thiểu chỉ 2 byte, tiêu thụ băng thông và năng lượng thấp
-hơn nhiều so với HTTP REST.
+Ham ghiCauHinhVaoFlash(idMoi, keyMoi)
+    Mo vung luu tru "device" o che do ghi-doc (read-write)
+    Ghi idMoi vao khoa "device_id"
+    Ghi keyMoi vao khoa "api_key"
+    Dong vung luu tru
+Ket thuc Ham
+\end{lstlisting}
 
-Trong đồ án, cấu trúc topic MQTT được thiết kế như sau:
+\subsection{Thiết kế Firmware}
+\label{subsec:design:firmware}
+
+\subsubsection*{a. Giao thức truyền thông MQTT và cấu trúc Topics}
+
+Hệ thống sử dụng giao thức truyền thông \textbf{MQTT} (Message Queuing Telemetry Transport) cho việc truyền dẫn dữ liệu từ các node cảm biến lên máy chủ~\cite{banks2014mqtt}. MQTT hoạt động trên mô hình Publish/Subscribe qua nền tảng TCP/IP, có kích thước tiêu đề gói tin (overhead) cực nhẹ (chỉ tối thiểu 2 byte), giúp tối ưu hóa băng thông truyền tải và giảm điện năng tiêu thụ cho thiết bị. Hệ thống sử dụng thư viện \texttt{PubSubClient} tích hợp trên ESP32 để kết nối đến máy chủ trung tâm. Cấu trúc các topic truyền tin được định nghĩa trong Bảng~\ref{tab:mqtt_topics}.
 
 \begin{table}[H]
   \centering
@@ -99,329 +193,405 @@ Trong đồ án, cấu trúc topic MQTT được thiết kế như sau:
     \textbf{Topic} & \textbf{Chiều} & \textbf{Mô tả} \\
     \midrule
     \texttt{devices/register}
-      & Node $\to$ Broker
-      & Node mới gửi MAC address để đăng ký \\
+      & Node $\to$ Máy chủ
+      & Node mới gửi MAC address để đăng ký tự động \\
     \texttt{devices/\{mac\}/config}
-      & Broker $\to$ Node
-      & Backend trả về \texttt{api\_key} và cấu hình \\
+      & Máy chủ $\to$ Node
+      & Máy chủ trả lời \texttt{api\_key} và thông số cấu hình \\
     \texttt{device/\{api\_key\}/data}
-      & Node $\to$ Broker
-      & Gửi dữ liệu nhiệt độ, độ ẩm định kỳ \\
+      & Node $\to$ Máy chủ
+      & Gửi dữ liệu nhiệt độ, độ ẩm và AQI định kỳ \\
     \bottomrule
   \end{tabularx}
 \end{table}
 
-MQTT broker được tích hợp trực tiếp vào backend Node.js thông qua thư
-viện \textbf{Aedes} - một broker MQTT thuần Node.js hiệu năng cao,
-không yêu cầu cài đặt broker riêng biệt (như Mosquitto), giúp đơn giản
-hóa việc triển khai và tích hợp chặt chẽ với logic nghiệp vụ.
+MQTT broker được tích hợp trực tiếp vào backend Node.js thông qua thư viện \textbf{Aedes} - một broker MQTT thuần Node.js hiệu năng cao, không yêu cầu cài đặt broker riêng biệt (như Mosquitto), giúp đơn giản hóa việc triển khai và tích hợp chặt chẽ với logic nghiệp vụ.
 
-%------------------------------------------------------------
-\section{Công nghệ phần mềm Backend}
-\label{sec:tech:backend}
-%------------------------------------------------------------
+\subsubsection*{b. Luồng xử lý chính của firmware}
 
-\subsection{Node.js và Express}
-\label{subsec:tech:nodejs}
+Firmware được tổ chức theo kiến trúc phân tầng như minh họa trong
+Hình~\ref{fig:firmware_arch}. Vòng lặp chính (\texttt{loop()}) điều
+phối ba tác vụ theo chu kỳ: đọc cảm biến, duy trì kết nối MQTT và
+gửi dữ liệu.
 
-Backend hệ thống được xây dựng trên \textbf{Node.js} - môi trường
-thực thi JavaScript phía server với kiến trúc event-driven, non-blocking
-I/O~\cite{nodejs}. Node.js đặc biệt phù hợp cho các hệ thống IoT đòi
-hỏi xử lý nhiều kết nối đồng thời (MQTT, WebSocket, HTTP) với độ trễ
-thấp. Framework \textbf{Express} được sử dụng để xây dựng RESTful API,
-cung cấp các endpoint quản lý người dùng, thiết bị, dữ liệu, cảnh báo
-và dự báo.
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.75\textwidth]{firmware_arch}
+  \caption{Kiến trúc firmware phân tầng của node ESP32}
+  \label{fig:firmware_arch}
+\end{figure}
 
-Các thư viện npm chính được sử dụng:
+Giải thuật vận hành chính của firmware được mô tả qua mã giả dưới đây:
 
+\begin{lstlisting}[language=C, caption={Giai thuat vong lap chinh dieu phoi firmware ESP32}, label={lst:firmware_main_pseudo}]
+Ham setup()
+    Khoi tao giao tiep cam bien DHT
+    docCauHinhTuFlash()
+    Neu chua co thong tin Wi-Fi:
+        Khoi chay AP "Sensor-Setup-[MAC]" de nguoi dung cau hinh mang
+    Cau hinh ket noi toi may chu MQTT Broker va dang ky ham callback nhan tin
+Ket thuc Ham
+
+Ham loop()
+    Neu chua co thong tin dang ky (api_key trong):
+        guiYeuCauDangKyToiTopic("devices/register") kem dia chi MAC
+        Cho 5 giay roi thu lai
+        Tra ve
+    Neu ket noi MQTT bi ngat:
+        Thuc hien ket noi lai bang tai khoan xac thuc api_key
+    Duy tri trang thai ket noi MQTT (mqttClient.loop())
+
+    Neu thoi gian hien tai - thoi diem gui cuoi cung >= 5 giay:
+        nhietDo = docNhietDoTuCamBien()
+        doAm = docDoAmTuCamBien()
+        aqi = sinhDuLieuAQIMoPhong()  // Danh cho pipeline ML
+        
+        Neu nhietDo va doAm hop le (khong phai NaN):
+            goiTin = Dong goi JSON { "temperature": nhietDo, "humidity": doAm, "aqi": aqi }
+            guiGoiTinToiTopic("device/" + api_key + "/data", goiTin)
+        Cap nhat thoi diem gui cuoi cung
+Ket thuc Ham
+\end{lstlisting}
+*Mã nguồn C++ chi tiết điều phối vòng lặp và logic gửi tin được đính kèm tại Phụ lục~\ref{lst:firmware_main}.*
+
+\subsubsection*{c. Xử lý tin nhắn cấu hình nhận được}
+
+Khi nhận cấu hình từ topic \texttt{devices/\{mac\}/config}, callback
+MQTT giải mã thông điệp JSON để lưu thông tin định danh thiết bị vào Flash, đặt cờ đăng ký thành công (\texttt{provisioned}) để chuyển sang chế độ gửi dữ liệu, hoặc thực hiện đặt lại thiết bị (reset) khi có yêu cầu:
+
+\begin{lstlisting}[language=C, caption={Giai thuat callback xu ly thong diep cau hinh tu MQTT Broker}, label={lst:mqtt_callback_pseudo}]
+Ham callbackNhanTin(topic, goiTin)
+    Giai ma goi tin JSON nhan duoc
+    Neu goi tin co lenh reset ("action" == "reset"):
+        Mo vung luu tru "device" o che do ghi-doc
+        Xoa toan bo cau hinh luu tru
+        Dong vung luu tru
+        Khoi dong lai thiet bi (ESP.restart())
+        Tra ve
+        
+    Neu goi tin chua "device_id" va "api_key":
+        ghiCauHinhVaoFlash(device_id, api_key)
+        Cap nhat bien trang thai: deviceId = device_id, deviceApiKey = api_key
+        Dat trang thai dang ky thanh cong (provisioned = True)
+Ket thuc Ham
+\end{lstlisting}
+
+\subsection{Thiết kế cơ sở dữ liệu}
+\label{subsec:design:database}
+
+\subsubsection*{a. Lựa chọn PostgreSQL lưu trữ dữ liệu}
+
+Hệ thống lựa chọn hệ quản trị cơ sở dữ liệu quan hệ \textbf{PostgreSQL} để lưu trữ toàn bộ dữ liệu người dùng, cấu hình thiết bị và dữ liệu chuỗi thời gian đo đạc được~\cite{postgresql}. PostgreSQL được lựa chọn cho đồ án vì:
 \begin{itemize}[leftmargin=2cm]
-  \item \textbf{aedes + mqtt:} MQTT broker và client tích hợp trong
-    cùng tiến trình Node.js.
-  \item \textbf{socket.io:} Thư viện WebSocket hỗ trợ phân phối dữ
-    liệu realtime đến dashboard.
-  \item \textbf{pg:} PostgreSQL client cho Node.js.
-  \item \textbf{jsonwebtoken + bcrypt:} Xác thực JWT và mã hóa mật khẩu.
-  \item \textbf{nodemailer:} Gửi email cảnh báo tự động.
-  \item \textbf{cors + dotenv:} Cấu hình CORS và biến môi trường.
+  \item Hỗ trợ đầy đủ SQL chuẩn, dễ truy vấn dữ liệu lịch sử theo khoảng thời gian với câu lệnh \texttt{WHERE timestamp BETWEEN ... AND ...}.
+  \item Tích hợp tốt với Node.js qua thư viện \texttt{pg} (PostgreSQL client).
+  \item Hỗ trợ tạo chỉ mục (index) trên cột \texttt{timestamp} và \texttt{device\_id} giúp tăng tốc truy vấn dữ liệu chuỗi thời gian cho các phép toán học sâu và nội suy.
+  \item Miễn phí, phổ biến, có độ ổn định cực cao và dễ triển khai trên môi trường local cũng như VPS.
 \end{itemize}
 
-\subsection{PostgreSQL}
-\label{subsec:tech:postgresql}
+\subsubsection*{b. Sơ đồ ERD}
 
-\textbf{PostgreSQL} là hệ quản trị cơ sở dữ liệu quan hệ mã nguồn mở,
-mạnh mẽ và ổn định~\cite{postgresql}. PostgreSQL được lựa chọn cho đồ
-án vì:
+Cơ sở dữ liệu PostgreSQL gồm 5 bảng chính, quan hệ được thể hiện trong Hình~\ref{fig:erd}.
 
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\textwidth]{erd}
+  \caption{Sơ đồ ERD cơ sở dữ liệu PostgreSQL}
+  \label{fig:erd}
+\end{figure}
+
+\subsubsection*{c. Định nghĩa schema cơ sở dữ liệu}
+
+Cấu trúc các bảng trong cơ sở dữ liệu được định nghĩa chi tiết tại Phụ lục~\ref{lst:schema}. Mối quan hệ giữa các bảng được thiết lập như sau:
 \begin{itemize}[leftmargin=2cm]
-  \item Hỗ trợ đầy đủ SQL chuẩn, dễ truy vấn dữ liệu lịch sử theo
-    khoảng thời gian với \texttt{WHERE timestamp BETWEEN ... AND ...}.
-  \item Tích hợp tốt với Node.js qua thư viện \texttt{pg}.
-  \item Hỗ trợ chỉ mục (index) trên cột \texttt{timestamp} và
-    \texttt{device\_id} giúp truy vấn dữ liệu chuỗi thời gian nhanh.
-  \item Miễn phí, phổ biến và dễ triển khai trên môi trường local
-    cũng như VPS.
+  \item \texttt{users} $\to$ \texttt{devices}: Một người dùng (tài khoản) có thể sở hữu và quản lý nhiều node thiết bị cảm biến khác nhau. Ràng buộc khóa ngoại \texttt{owner\_user\_id} tham chiếu đến bảng \texttt{users}.
+  \item \texttt{rooms} $\to$ \texttt{devices}: Một phòng có thể đặt nhiều node cảm biến để tăng mật độ và độ bao phủ không gian phục vụ bài toán nội suy. Mỗi thiết bị được định vị bằng toạ độ tương đối $(x, y)$ trong phòng thông qua khóa ngoại \texttt{room\_id}.
+  \item \texttt{devices} $\to$ \texttt{readings}: Ràng buộc một-nhiều, lưu trữ lịch sử chuỗi thời gian các chỉ số đo đạc theo từng mã thiết bị. Chỉ mục \texttt{idx\_readings\_device\_time} được tạo trên cặp cột \texttt{(device\_id, timestamp DESC)} giúp tăng tốc độ truy vấn 30 mẫu gần nhất phục vụ mô hình dự báo.
+  \item \texttt{devices} $\to$ \texttt{alerts}: Lưu lại lịch sử các sự kiện cảnh báo bất thường khi chỉ số môi trường vượt ngưỡng.
 \end{itemize}
 
-Schema cơ sở dữ liệu bao gồm 5 bảng chính: \texttt{users},
-\texttt{rooms}, \texttt{devices}, \texttt{readings} và \texttt{alerts},
-được trình bày chi tiết trong Chương~\ref{chap:design}.
+\subsection{Thiết kế Backend API}
+\label{subsec:design:backend}
 
-\subsection{Socket.io}
-\label{subsec:tech:socketio}
+\subsubsection*{a. Cấu trúc và công nghệ của Backend chính}
 
-\textbf{Socket.io} là thư viện cho phép giao tiếp hai chiều, realtime
-giữa server và client qua WebSocket (với fallback về HTTP long-polling
-khi cần)~\cite{socketio}. Trong hệ thống, Socket.io được sử dụng để
-đẩy dữ liệu cảm biến mới nhất đến dashboard ngay khi backend nhận được
-từ MQTT, không cần client polling định kỳ. Client xác thực qua JWT
-(\texttt{authenticate} event) và đăng ký nhận dữ liệu của thiết bị cụ
-thể (\texttt{subscribe\_device} event). Server emit sự kiện
-\texttt{new\_reading} đến room \texttt{device\_\{id\}} mỗi khi có dữ
-liệu mới từ node tương ứng.
+Máy chủ backend chính được xây dựng trên môi trường \textbf{Node.js} sử dụng framework \textbf{Express} để xây dựng kiến trúc RESTful API phục vụ các tác vụ xác thực, quản lý người dùng, cấu hình thiết bị và trung chuyển dữ liệu~\cite{nodejs}. Node.js sử dụng kiến trúc bất đồng bộ hướng sự kiện (event-driven, non-blocking I/O) giúp xử lý hàng ngàn kết nối đồng thời từ client và thiết bị với mức tiêu tốn tài nguyên tối thiểu.
 
-\subsection{FastAPI (Python)}
-\label{subsec:tech:fastapi}
+Các thư viện npm chính được sử dụng để phát triển backend bao gồm:
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{aedes + mqtt:} MQTT broker và client tích hợp trực tiếp trong cùng tiến trình Node.js giúp xử lý sự kiện trong cùng vòng lặp sự kiện, tối thiểu hóa độ trễ trung gian.
+  \item \textbf{socket.io:} Thư viện WebSocket hỗ trợ giao tiếp hai chiều, realtime để phân phối dữ liệu ngay lập tức tới dashboard của client mà không cần cơ chế polling~\cite{socketio}.
+  \item \textbf{pg:} PostgreSQL client cho Node.js phục vụ giao tiếp DB.
+  \item \textbf{jsonwebtoken + bcrypt:} Xác thực an toàn bằng mã khóa JWT và băm mật khẩu bảo vệ tài khoản.
+  \item \textbf{nodemailer:} Dịch vụ gửi email cảnh báo tự động khi các chỉ số đo đạc vượt quá ngưỡng an toàn được cài đặt.
+\end{itemize}
 
-\textbf{FastAPI} là framework Python hiện đại để xây dựng API hiệu
-năng cao, hỗ trợ bất đồng bộ (async/await) và tự động sinh tài liệu
-OpenAPI~\cite{fastapi}. FastAPI được tách thành một \textbf{microservice
-độc lập}: dịch vụ dự báo chuỗi thời gian LSTM (chạy trên cổng \textbf{8000}) và dịch vụ nội suy không gian Kriging/IDW kết hợp dự báo (chạy trên cổng \textbf{8001}). Các dịch vụ thực hiện:
+Các API endpoint được phân chia thành ba nhóm chính, phân quyền truy cập thông qua mã xác thực JWT:
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Quản lý người dùng và xác thực:} Các API \texttt{/api/auth/register}, \texttt{/api/auth/login} để đăng ký và đăng nhập nhận mã token bảo mật.
+  \item \textbf{Quản lý thiết bị và phòng học:} Các API \texttt{GET, POST, PUT, DELETE /api/devices} và \texttt{/api/rooms} để xem danh sách, đăng ký và cấu hình toạ độ/ngưỡng cảnh báo cho từng node cảm biến.
+  \item \textbf{Dữ liệu môi trường, dự báo và cảnh báo:} API \texttt{GET /api/data} truy vấn lịch sử đo, API \texttt{GET /api/forecast} gọi FastAPI LSTM service để lấy kết quả dự báo thời gian, và API \texttt{GET /api/spatial-forecast} gọi FastAPI spatial service lấy dữ liệu lưới nhiệt độ/độ ẩm không gian.
+\end{itemize}
 
+\subsubsection*{b. Xác thực người dùng bằng JWT}
+
+Xác thực phía API sử dụng cơ chế token JWT (JSON Web Token) để đảm bảo tính an toàn cho tài nguyên. Giải thuật trung gian xác thực (middleware) được mô tả qua mã giả dưới đây:
+
+\begin{lstlisting}[language=JavaScript, caption={Giai thuat middleware xac thuc nguoi dung bang token JWT}, label={lst:jwt_middleware_pseudo}]
+Ham xacThucTokenJWT(yeuCau, phanHoi, hamTiepTheo)
+    chuoiXacThuc = Lay Authorization tu yeuCau.headers
+    Neu chuoiXacThuc khong ton tai:
+        Tra ve phanHoi voi ma loi 401 ("Missing token")
+        
+    token = Trich xuat phan chuoi sau tu "Bearer <token>"
+    Thu:
+        thongTinGiaiMa = Giai ma token bang khoa bi mat JWT_SECRET
+        Gan yeuCau.user = thongTinGiaiMa
+        Chuyen tiep den hamTiepTheo()
+    Neu xay ra loi giai ma:
+        Tra ve phanHoi voi ma loi 403 ("Invalid token")
+Ket thuc Ham
+\end{lstlisting}
+
+\subsubsection*{c. Logic tự động phát hiện vượt ngưỡng cảnh báo}
+
+Dịch vụ cảnh báo (\texttt{alertService.js}) được khởi chạy bất đồng bộ mỗi khi backend nhận được bản ghi dữ liệu đo đạc mới từ node cảm biến thông qua MQTT. Dịch vụ đối chiếu giá trị đo với các ngưỡng cấu hình lưu trong cơ sở dữ liệu để đưa ra quyết định gửi thông báo qua giao diện và gửi email cảnh báo tự động:
+
+\begin{lstlisting}[language=JavaScript, caption={Giai thuat kiem tra va kich hoat canh bao tu dong}, label={lst:alert_service_pseudo}]
+Ham kiemTraNguongCanhBao(thietBi, duLieuDo)
+    nhietDo = duLieuDo.temperature
+    doAm = duLieuDo.humidity
+    danhSachCanhBao = []
+
+    Neu nhietDo > thietBi.temp_high:
+        Them canh bao co noi dung "Nhiet do vuot nguong cao"
+    Neu nhietDo < thietBi.temp_low:
+        Them canh bao co noi dung "Nhiet do duoi nguong thap"
+    Neu doAm > thietBi.hum_high:
+        Them canh bao co noi dung "Do am vuot nguong cao"
+    Neu doAm < thietBi.hum_low:
+        Them canh bao co noi dung "Do am duoi nguong thap"
+
+    Voi moi canh bao trong danhSachCanhBao:
+        Ghi ban ghi canh bao vao bang SQL alerts
+        Neu thietBi cau hinh gui email (notify_email = True):
+            Tao noi dung va gui email canh bao thong qua dich vu Nodemailer
+Ket thuc Ham
+\end{lstlisting}
+*Mã nguồn JavaScript chi tiết của dịch vụ kiểm tra cảnh báo và lưu cơ sở dữ liệu được đính kèm tại Phụ lục~\ref{lst:alert_service}.*
+
+\subsection{Thiết kế và huấn luyện mô hình Machine Learning}
+\label{subsec:design:ml}
+
+\subsubsection*{a. Lựa chọn FastAPI và PyTorch làm Machine Learning Service}
+
+Toàn bộ pipeline liên quan đến học máy được tách thành một \textbf{microservice độc lập} chạy bằng Python sử dụng framework \textbf{FastAPI}~\cite{fastapi}. FastAPI hỗ trợ lập trình bất đồng bộ (asyncio), mang lại hiệu năng cao tương đương Node.js và Go, đồng thời tự động tạo giao diện thử nghiệm API thông qua tài liệu OpenAPI.
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{LSTM inference (cổng 8000):} Nhận yêu cầu từ backend Node.js, truy vấn PostgreSQL lấy cửa sổ 30 bản ghi gần nhất, chạy mô hình LSTM (PyTorch) và trả về 15 giá trị dự báo kế tiếp.
+  \item \textbf{Nội suy không gian (cổng 8001):} Kết hợp dữ liệu vị trí và giá trị đo đạc thực tế của các cảm biến trong phòng, tính toán nội suy Kriging và IDW để trả về lưới dữ liệu mượt mà kích thước $40 \times 50$ điểm làm bản đồ nhiệt.
+\end{itemize}
+
+Việc tách riêng biệt này giúp backend chính không bị nghẽn luồng xử lý do các phép toán học sâu và nội suy nặng. Mô hình Machine Learning được thiết kế và huấn luyện bằng \textbf{PyTorch} - thư viện học sâu mạnh mẽ hỗ trợ đồ thị tính toán động linh hoạt~\cite{pytorch2019}.
+
+\subsubsection*{b. Bài toán dự báo chuỗi thời gian và Kiến trúc mô hình LSTM}
+
+\textbf{Bài toán dự báo chuỗi thời gian:} Dữ liệu môi trường đo được theo chu kỳ cố định là các biến liên tục tạo thành chuỗi thời gian (time series)~\cite{box2015time}. Với cửa sổ quan sát quá khứ $w = 30$ mẫu (2.5 phút) và tầm nhìn dự báo tương lai $h = 15$ mẫu (1.25 phút), đầu vào của mô hình là một ma trận đa biến kích thước $30 \times 3$ gồm 3 thông số: nhiệt độ, độ ẩm và AQI. Mô hình học sâu LSTM được chọn thay thế các mô hình tuyến tính cổ điển (như ARIMA) để giải quyết các mối quan hệ phi tuyến phức tạp trong dữ liệu môi trường.
+
+\textbf{Kiến trúc LSTM (Long Short-Term Memory):} LSTM giải quyết hiện tượng triệt tiêu đạo hàm của RNN truyền thống thông qua cấu trúc Cell State làm nhiệm vụ lưu giữ thông tin dài hạn kết hợp với ba cổng điều khiển chính~\cite{hochreiter1997lstm}:
 \begin{enumerate}[leftmargin=2cm]
-  \item \textbf{LSTM inference (cổng 8000):} Nhận yêu cầu từ backend Node.js, truy
-    vấn PostgreSQL lấy window 30 bản ghi, chạy mô hình LSTM (PyTorch)
-    và trả về 15 giá trị dự báo.
-  \item \textbf{Nội suy không gian (cổng 8001):} Kết hợp dữ liệu vị trí và giá
-    trị cảm biến của các node, tính toán Kriging/IDW, trả về lưới
-    40$\times$50 điểm cho heatmap.
-\end{enumerate}
-
-Việc tách ML service thành microservice riêng giúp backend Node.js
-không bị block khi thực hiện inference, đồng thời cho phép mở rộng
-hoặc thay thế mô hình ML độc lập mà không ảnh hưởng đến luồng xử lý
-dữ liệu chính.
-
-%------------------------------------------------------------
-\section{Mô hình học máy cho dữ liệu chuỗi thời gian}
-\label{sec:tech:ml}
-%------------------------------------------------------------
-
-\subsection{Bài toán dự báo chuỗi thời gian}
-\label{subsec:tech:timeseries}
-
-Dữ liệu nhiệt độ, độ ẩm và AQI thu thập từ node theo chu kỳ cố định
-tạo thành \textbf{chuỗi thời gian} (time series) - tập hợp các quan
-sát được sắp xếp theo thứ tự thời gian. Bài toán đặt ra là: dựa trên
-$w$ quan sát gần nhất $\{x_{t-w+1}, \ldots, x_t\}$, dự báo $h$ giá
-trị tiếp theo $\{\hat{x}_{t+1}, \ldots, \hat{x}_{t+h}\}$~%
-\cite{box2015time}.
-
-Trong đồ án, tham số được chọn là $w = 30$ (window size - sử dụng
-30 mẫu gần nhất, tương đương 2.5 phút với chu kỳ lấy mẫu 5 giây) và
-$h = 15$ phút. Đầu vào mô hình là vector ba chiều gồm nhiệt độ, độ ẩm và AQI
-tại mỗi bước thời gian (multi-variate forecasting).
-
-Các phương pháp truyền thống như ARIMA hay Holt-Winters phù hợp với
-chuỗi thời gian tuyến tính và ổn định, nhưng kém hiệu quả khi dữ liệu
-có tính phi tuyến hoặc phụ thuộc phức tạp vào nhiều biến. Mô hình học
-sâu, đặc biệt là \textbf{LSTM}, đã chứng minh vượt trội trong nhiều
-bài toán dự báo chuỗi thời gian môi trường nhờ khả năng học các phụ
-thuộc dài hạn~\cite{hochreiter1997lstm}.
-
-\subsection{Kiến trúc LSTM}
-\label{subsec:tech:lstm}
-
-\textbf{LSTM (Long Short-Term Memory)} là một biến thể của mạng nơ-ron
-hồi tiếp (RNN) được thiết kế để giải quyết vấn đề triệt tiêu đạo hàm
-(vanishing gradient) trong RNN truyền thống~\cite{hochreiter1997lstm}.
-LSTM đưa ra cơ chế \textbf{cell state} và ba \textbf{cổng điều khiển}:
-
-\begin{itemize}[leftmargin=2cm]
-  \item \textbf{Forget gate} $f_t$: Quyết định thông tin nào từ cell
-    state cũ cần quên đi.
+  \item \textbf{Forget gate} $f_t$: Quyết định thông tin cũ nào từ Cell State cần được lãng quên:
     \begin{equation}
       f_t = \sigma(W_f \cdot [h_{t-1}, x_t] + b_f)
     \end{equation}
-
-  \item \textbf{Input gate} $i_t$: Quyết định thông tin mới nào cần
-    lưu vào cell state.
+  \item \textbf{Input gate} $i_t$: Quyết định cập nhật thông tin mới nào vào Cell State:
     \begin{equation}
       i_t = \sigma(W_i \cdot [h_{t-1}, x_t] + b_i)
     \end{equation}
     \begin{equation}
       \tilde{C}_t = \tanh(W_C \cdot [h_{t-1}, x_t] + b_C)
     \end{equation}
-
-  \item \textbf{Output gate} $o_t$: Quyết định phần nào của cell state
-    được xuất ra làm hidden state.
+  \item \textbf{Output gate} $o_t$: Quyết định phần giá trị nào của Cell State sẽ được xuất ra làm hidden state tiếp theo:
     \begin{equation}
       o_t = \sigma(W_o \cdot [h_{t-1}, x_t] + b_o)
     \end{equation}
     \begin{equation}
       h_t = o_t \odot \tanh(C_t)
     \end{equation}
-\end{itemize}
+\end{enumerate}
+Trong đó $\sigma$ là hàm sigmoid kích hoạt, $\odot$ là phép nhân Hadamard (nhân từng phần tử), $W$ và $b$ đại diện cho ma trận trọng số và bias được tối ưu trong quá trình huấn luyện.
 
-Trong đó $\sigma$ là hàm sigmoid, $\odot$ là phép nhân theo từng phần
-tử (Hadamard product), $W$ và $b$ là các ma trận trọng số và bias được
-học trong quá trình huấn luyện.
+\subsubsection*{c. Quy trình chuẩn bị dữ liệu và huấn luyện}
 
-\subsection{Framework PyTorch}
-\label{subsec:tech:pytorch}
+Dữ liệu lịch sử từ bảng \texttt{readings} được tiền xử lý qua các bước: loại bỏ nhiễu/giá trị lỗi (\texttt{NULL}), đưa các thuộc tính về khoảng giá trị $[0, 1]$ bằng bộ chuẩn hoá \texttt{MinMaxScaler} của thư viện scikit-learn để tăng tốc độ hội tụ khi huấn luyện. Bộ chuẩn hóa được lưu trữ dưới dạng file \texttt{scaler.pkl} để sử dụng lại khi suy luận.
 
-\textbf{PyTorch} là framework học sâu mã nguồn mở do Meta AI phát
-triển, nổi bật với đồ thị tính toán động (dynamic computation graph)
-cho phép debug trực quan và linh hoạt trong thiết kế
-kiến trúc~\cite{pytorch2019}. PyTorch được lựa chọn cho đồ án vì:
+Mô hình được huấn luyện bằng hàm tối ưu Adam (learning rate = $10^{-3}$), tối ưu hóa hàm mất mát Mean Squared Error (MSELoss). Quy trình chi tiết mã nguồn huấn luyện LSTM được trình bày tại Phụ lục~\ref{lst:lstm_train}, và quy trình thực hiện API suy luận của FastAPI service được đính kèm tại Phụ lục~\ref{lst:lstm_infer}.
 
+\subsubsection*{d. Bài toán nội suy không gian và các thuật toán nội suy}
+
+\textbf{Bài toán nội suy không gian:} Với $n$ node cảm biến đặt tại các vị trí $(lat_i, lng_i)$, cần ước lượng giá trị liên tục $\hat{z}$ tại mọi điểm chưa đo $(lat, lng)$ để tạo bản đồ nhiệt phân bố. Hệ thống sử dụng kết hợp hai phương pháp:
 \begin{itemize}[leftmargin=2cm]
-  \item API \texttt{torch.nn} rõ ràng, dễ xây dựng kiến trúc LSTM
-    tùy chỉnh.
-  \item Tích hợp tốt với NumPy và scikit-learn (dùng
-    \texttt{scaler.pkl} từ \texttt{sklearn.preprocessing}).
-  \item Hỗ trợ lưu và load model weights (\texttt{.pth}) tiện lợi
-    cho việc deploy inference trên FastAPI.
-  \item Cộng đồng lớn, tài liệu phong phú, phù hợp môi trường nghiên
-    cứu và học thuật.
+  \item \textbf{IDW (Inverse Distance Weighting):} Phương pháp nội suy xác định, ước tính giá trị tại điểm cần đo bằng trung bình có trọng số của các điểm lân cận với trọng số tỷ lệ nghịch với khoảng cách lũy thừa $p=2$~\cite{shepard1968idw}:
+    \begin{equation}
+      \hat{z}(x) = \frac{\sum_{i=1}^{n} w_i(x) \cdot z_i}{\sum_{i=1}^{n} w_i(x)}, \quad w_i(x) = \frac{1}{d(x, x_i)^2}
+    \end{equation}
+    IDW được sử dụng để sinh ra các **node ảo** tại các góc và cạnh của phòng nhằm tăng độ bao phủ biên, hạn chế sai sót khi số lượng thiết bị thực đo ban đầu còn ít.
+  \item \textbf{Ordinary Kriging:} Phương pháp nội suy địa thống kê tối thiểu hóa phương sai ước lượng (BLUE) bằng cách mô hình hóa tương quan không gian qua semivariogram~\cite{cressie1990kriging}. Kriging sử dụng Variogram dạng Gaussian để tính toán mượt mà giá trị của toàn bộ lưới kích thước $40 \times 50$ điểm, hiển thị trực quan bản đồ nhiệt trên Leaflet.
+\end{itemize}
+Mã nguồn Python thực thi quá trình kết hợp IDW sinh node góc và nội suy Kriging lưới $40 \times 50$ điểm được đính kèm tại Phụ lục~\ref{lst:spatial}.
+
+\subsection{Thiết kế Dashboard (Frontend)}
+\label{subsec:design:frontend}
+
+\subsubsection*{a. Lựa chọn và mô tả chi tiết công nghệ Frontend}
+
+Giao diện Dashboard được xây dựng bằng các công nghệ web hiện đại để đáp ứng tính trực quan và khả năng cập nhật tức thời:
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{React và Vite:} Giao diện Web được xây dựng bằng React 19 theo kiến trúc component giúp phân tách và tái sử dụng các thành phần UI~\cite{react2024}. Vite đóng vai trò làm công cụ bundler, hỗ trợ Hot Module Replacement (HMR) cho tốc độ phản hồi cực nhanh trong quá trình phát triển và tối ưu mã nguồn khi build production. Cơ chế cập nhật State của React giúp giao diện phản ứng tức thời với dữ liệu realtime truyền tới từ WebSockets.
+  \item \textbf{Chart.js và react-chartjs-2:} Thư viện Chart.js kết hợp wrapper React được sử dụng để vẽ các biểu đồ chỉ số môi trường theo thời gian. Khi nhận được sự kiện dữ liệu cảm biến mới từ Socket.io, component tự động cập nhật State, Chart.js thực hiện vẽ thêm điểm dữ liệu mới vào biểu đồ mà không cần tải lại toàn bộ trang web.
+  \item \textbf{Leaflet và react-leaflet:} Thư viện bản đồ tương tác mã nguồn mở nhẹ Leaflet được sử dụng để hiển thị mặt bằng phòng học~\cite{leaflet}. Lưới dữ liệu $40 \times 50$ điểm sau khi nội suy được chuyển thành lớp phủ màu sắc (gradient từ mát mẻ đến nóng ẩm) nằm đè lên sơ đồ mặt bằng, hiển thị bản đồ nhiệt trực quan cho người vận hành.
+\end{itemize}
+
+\subsubsection*{b. Sơ đồ điều hướng các trang}
+
+Hình~\ref{fig:nav_diagram} mô tả sơ đồ điều hướng giữa các trang trong React dashboard. Trang Login là điểm vào bắt buộc; sau khi xác thực thành công, người dùng được chuyển đến Dashboard chính.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\textwidth]{nav_diagram}
+  \caption{Sơ đồ điều hướng các trang trong React dashboard}
+  \label{fig:nav_diagram}
+\end{figure}
+
+Các trang chức năng bao gồm:
+\begin{itemize}[leftmargin=2cm]
+  \item \textbf{Dashboard (Trang chủ):} Hiển thị danh sách tóm tắt thiết bị, cảnh báo gần nhất, biểu đồ cập nhật trực tiếp dữ liệu đo đạc (realtime line chart).
+  \item \textbf{Thiết bị (Devices):} Danh sách chi tiết các node cảm biến, cho phép thay đổi cấu hình ngưỡng cảnh báo và xem lại dữ liệu lịch sử.
+  \item \textbf{Dự báo (Forecast):} Tab dự báo trạm (Single Device) hiển thị biểu đồ dự báo LSTM tương lai và Tab dự báo không gian (Spatial) hiển thị heatmap nội suy không gian của căn phòng được chọn.
+  \item \textbf{Quản lý phòng (Rooms):} Nơi người quản trị tạo sơ đồ phòng học, định vị toạ độ $x, y$ đặt các thiết bị trên mặt bằng sàn.
+  \item \textbf{Cảnh báo (Alerts):} Danh sách lịch sử các cảnh báo kèm chức năng xác nhận đã xử lý (acknowledge).
 \end{itemize}
 
 %------------------------------------------------------------
-\section{Thuật toán nội suy không gian}
-\label{sec:tech:spatial}
+\section{Triển khai}
+\label{sec:design:deploy}
 %------------------------------------------------------------
 
-\subsection{Bài toán nội suy không gian}
-\label{subsec:tech:spatial_problem}
+\subsection{Môi trường triển khai}
+\label{subsec:design:deploy:env}
 
-Với $n$ node cảm biến đặt tại các vị trí $(lat_i, lng_i)$ trong không
-gian, mỗi node đo được giá trị $z_i$ (nhiệt độ hoặc độ ẩm), bài toán
-nội suy không gian là ước tính giá trị $\hat{z}$ tại bất kỳ điểm
-$(lat, lng)$ nào trong không gian, từ đó tái tạo bản đồ phân bố liên
-tục. Hệ thống sử dụng kết hợp hai phương pháp: \textbf{IDW} và
-\textbf{Kriging}.
+Hệ thống được triển khai và kiểm thử trong môi trường phòng lab với cấu hình cụ thể như sau:
 
-\subsection{IDW - Inverse Distance Weighting}
-\label{subsec:tech:idw}
+\begin{table}[H]
+  \centering
+  \caption{Cấu hình môi trường triển khai}
+  \label{tab:deploy_env}
+  \begin{tabular}{ll}
+    \toprule
+    \textbf{Thành phần} & \textbf{Cấu hình} \\
+    \midrule
+    Máy chủ Backend     & Máy tính cá nhân / Laptop \\
+    Hệ điều hành        & Ubuntu 22.04 LTS / Windows 11 (WSL2) \\
+    Node.js             & v18 LTS \\
+    Python              & 3.10+ \\
+    PostgreSQL          & v15, chạy local \\
+    Node IoT            & ESP32 DevKit v1 + DHT11 \\
+    Mạng                & Wi-Fi LAN cùng subnet \\
+    \bottomrule
+  \end{tabular}
+\end{table}
 
-IDW là phương pháp nội suy xác định, trong đó giá trị tại điểm cần
-ước tính được tính là trung bình có trọng số của các điểm đã biết, với
-trọng số tỷ lệ nghịch với khoảng cách~\cite{shepard1968idw}:
+\subsection{Hướng dẫn khởi động hệ thống}
+\label{subsec:design:deploy:guide}
 
-\begin{equation}
-  \hat{z}(x) = \frac{\sum_{i=1}^{n} w_i(x) \cdot z_i}
-                    {\sum_{i=1}^{n} w_i(x)},
-  \quad w_i(x) = \frac{1}{d(x, x_i)^p}
-\end{equation}
+Quy trình khởi động hệ thống theo thứ tự:
 
-Trong đó $d(x, x_i)$ là khoảng cách Euclidean từ điểm cần ước tính
-đến node $i$, và $p$ là tham số lũy thừa (thường $p = 2$). Trong đồ
-án, IDW được dùng để sinh thêm các \textbf{node ảo} tại các góc phòng,
-cải thiện độ bao phủ biên khi số lượng node thực còn ít.
+\begin{enumerate}[leftmargin=2cm]
+  \item \textbf{Khởi động cơ sở dữ liệu PostgreSQL} và thực thi các câu lệnh SQL khởi tạo cấu trúc bảng từ tệp \texttt{schema.sql} (chi tiết xem tại Phụ lục~\ref{lst:schema}).
+  \item \textbf{Khởi động Backend Node.js:}
+    Di chuyển vào thư mục \texttt{server/}, cài đặt các gói thư viện phụ thuộc bằng lệnh \texttt{npm install}, tạo tệp cấu hình biến môi trường \texttt{.env} chứa thông tin kết nối PostgreSQL, khóa bí mật JWT\_SECRET, và thông tin SMTP email cảnh báo. Cuối cùng khởi chạy máy chủ bằng lệnh \texttt{node index.js}.
+  \item \textbf{Khởi động hai FastAPI Machine Learning service (chạy đồng thời):}
+    Di chuyển vào thư mục \texttt{forecast/}. Khởi chạy service dự báo chuỗi thời gian LSTM ở cổng \texttt{8000} bằng lệnh:
+    \texttt{uvicorn time\_forecast.main:app --port 8000 --reload}.
+    Khởi chạy service nội suy không gian địa thống kê Kriging ở cổng \texttt{8001} bằng lệnh:
+    \texttt{uvicorn spatial\_forecast:app --port 8001 --reload}.
+  \item \textbf{Khởi động Frontend React:}
+    Di chuyển vào thư mục \texttt{frontend/}, chạy lệnh \texttt{npm install} để cài đặt các thư viện React. Khởi chạy máy chủ phát triển frontend ở chế độ Local Development bằng lệnh \texttt{npm run dev} (mặc định chạy ở cổng \texttt{5173}).
+  \item \textbf{Nạp firmware lên ESP32:}
+    Mở file \texttt{sensor/sensor.ino} trên môi trường phát triển Arduino IDE. Cập nhật các hằng số Wi-Fi SSID, mật khẩu mạng Wi-Fi và địa chỉ IP tĩnh của máy chủ backend làm MQTT Broker. Thực hiện biên dịch và nạp chương trình lên vi điều khiển ESP32 qua cáp micro-USB.
+  \item \textbf{Kiểm thử giao diện:}
+    Mở trình duyệt web truy cập địa chỉ \texttt{http://localhost:5173}. Đăng ký tài khoản người dùng đầu tiên để đăng nhập vào Dashboard. Bật nguồn node cảm biến ESP32, thiết bị sẽ tự động đăng ký và truyền dữ liệu cập nhật tức thời lên giao diện biểu đồ realtime của hệ thống.
+\end{enumerate}
 
-\subsection{Kriging}
-\label{subsec:tech:kriging}
+\subsection{Script mô phỏng node IoT}
+\label{subsec:design:deploy:simulate}
 
-Kriging là phương pháp nội suy thống kê địa không gian (geostatistical
-interpolation) dựa trên lý thuyết biến ngẫu nhiên khu vực hóa
-(regionalized variable)~\cite{cressie1990kriging}. Khác với IDW,
-Kriging tối thiểu hóa phương sai ước lượng (BLUE - Best Linear
-Unbiased Estimator) thông qua mô hình hóa cấu trúc không gian bằng
-\textbf{variogram}. Trong đồ án, Kriging được triển khai qua thư viện
-\texttt{pykrige} (Python), sử dụng variogram model dạng Gaussian.
+Để phục vụ việc kiểm thử khả năng chịu tải, luồng dữ liệu truyền tải của nhiều thiết bị đo cùng lúc mà không cần phần cứng thực tế, đồ án cung cấp một script mô phỏng chạy bằng Node.js. Thuật toán của script mô phỏng được mô tả bằng mã giả như sau:
 
-Kriging cho kết quả mượt mà và chính xác hơn IDW khi dữ liệu có cấu
-trúc không gian rõ ràng, và là phương pháp chính tạo ra lưới dữ liệu
-40$\times$50 điểm dùng để render heatmap trên Leaflet.
-
-%------------------------------------------------------------
-\section{Công nghệ Frontend}
-\label{sec:tech:frontend}
-%------------------------------------------------------------
-
-\subsection{React và Vite}
-\label{subsec:tech:react}
-
-Giao diện dashboard được xây dựng bằng \textbf{React 19}~\cite{react2024}
-- thư viện JavaScript phổ biến nhất cho phát triển giao diện người
-dùng theo mô hình component-based. \textbf{Vite} được sử dụng làm
-build tool, cung cấp tốc độ phát triển (HMR - Hot Module Replacement)
-và build production nhanh hơn Create React App. React được lựa chọn vì
-khả năng cập nhật giao diện phản ứng (reactive) khi nhận dữ liệu
-realtime từ Socket.io, phù hợp cho dashboard hiển thị dữ liệu động.
-
-\subsection{Chart.js và react-chartjs-2}
-\label{subsec:tech:chartjs}
-
-Biểu đồ thời gian thực và biểu đồ lịch sử dữ liệu cảm biến được vẽ
-bằng \textbf{Chart.js} thông qua wrapper \textbf{react-chartjs-2}. Khi
-Socket.io nhận được event \texttt{new\_reading}, component React cập
-nhật state, Chart.js tự động render điểm dữ liệu mới vào biểu đồ mà
-không cần tải lại trang. Biểu đồ dự báo LSTM cũng được hiển thị trên
-cùng chart với dữ liệu lịch sử, phân biệt bằng màu sắc khác nhau.
-
-\subsection{Leaflet và react-leaflet}
-\label{subsec:tech:leaflet}
-
-Bản đồ phân bố không gian và heatmap được render bằng
-\textbf{Leaflet}~\cite{leaflet} - thư viện bản đồ tương tác mã nguồn
-mở nhẹ và hiệu năng cao - thông qua wrapper \textbf{react-leaflet}.
-Dữ liệu lưới 40$\times$50 điểm từ FastAPI service được chuyển thành
-lớp heatmap màu sắc (gradient từ xanh lam - mát/khô đến đỏ -
-nóng/ẩm) phủ lên bản đồ sàn phòng, giúp người dùng trực quan nhận
-biết vùng có điều kiện môi trường bất thường.
+\begin{lstlisting}[language=JavaScript, caption={Giai thuat script mo phong node thiet bi gui du lieu len may chu}, label={lst:simulate_pseudo}]
+Ham moPhongGuiDuLieu()
+    Ket noi toi dia chi MQTT Broker noi bo ("mqtt://localhost:1883")
+    Dat ma API_KEY = "your-api-key-here" (ma khoa xac thuc da dang ky trong DB)
+    Dinh ky moi 5 giay thuc hien:
+        nhietDo = Sinh so thuc ngau nhien tu 20.0 den 35.0 (lay 1 chu so thap phan)
+        doAm = Sinh so thuc ngau nhien tu 40.0 den 80.0
+        aqi = Sinh so thuc ngau nhien tu 30.0 den 100.0 (chi so chat luong khong khi gia lap)
+        goiTin = Dong goi JSON { "temperature": nhietDo, "humidity": doAm, "aqi": aqi }
+        Publish goi tin len topic "device/" + API_KEY + "/data"
+        In thong tin log ra man hinh console
+Ket thuc Ham
+\end{lstlisting}
 
 %------------------------------------------------------------
-\section{Tổng hợp công nghệ và lý do lựa chọn}
-\label{sec:tech:summary}
+\section{Tổng hợp công nghệ sử dụng trong hệ thống}
+\label{sec:design:tech_summary}
 %------------------------------------------------------------
 
-Bảng~\ref{tab:tech_summary} tổng hợp toàn bộ công nghệ được sử dụng
-trong hệ thống và lý do lựa chọn.
+Bảng~\ref{tab:tech_summary} tổng hợp toàn bộ các công nghệ cốt lõi được lựa chọn sử dụng xuyên suốt các thành phần của hệ thống cùng với các lý do kỹ thuật tương ứng.
 
 \begin{table}[H]
   \centering
   \caption{Tổng hợp công nghệ sử dụng trong hệ thống}
   \label{tab:tech_summary}
-  \begin{tabularx}{\textwidth}{p{3cm} p{3cm} X}
+  \begin{tabularx}{\textwidth}{p{3cm} p{3.2cm} X}
     \toprule
     \textbf{Thành phần} & \textbf{Công nghệ} & \textbf{Lý do lựa chọn} \\
     \midrule
     Vi điều khiển
       & ESP32
-      & Tích hợp Wi-Fi, chi phí thấp, hệ sinh thái Arduino phong phú \\
+      & Tích hợp Wi-Fi, chi phí thấp, hiệu năng xử lý cao, hệ sinh thái phong phú \\
     Cảm biến
       & DHT11
-      & Đơn giản, chi phí thấp, đủ độ chính xác cho prototype \\
+      & Giao tiếp đơn giản 1-Wire, chi phí cực thấp, đủ chính xác cho prototype \\
     Giao thức IoT
       & MQTT (Aedes)
-      & Nhẹ, phù hợp IoT, tích hợp trực tiếp vào Node.js \\
-    Backend API
+      & Gói tin nhẹ, overhead tối thiểu, kết nối TCP bền vững, tích hợp Node.js \\
+    Backend chính
       & Node.js/Express
-      & Non-blocking I/O, xử lý nhiều kết nối đồng thời tốt \\
-    Realtime
+      & Xử lý bất đồng bộ I/O tốt, điều phối nhiều kết nối realtime đồng thời \\
+    Realtime push
       & Socket.io
-      & WebSocket dễ dùng, hỗ trợ room/namespace \\
+      & Thiết lập WebSocket hai chiều nhanh, quản lý room theo thiết bị hiệu quả \\
     Cơ sở dữ liệu
       & PostgreSQL
-      & Quan hệ đầy đủ, truy vấn time-series hiệu quả với index \\
+      & Hệ quản trị quan hệ bền vững, truy vấn nhanh chuỗi thời gian nhờ lập chỉ mục \\
     ML Framework
       & PyTorch
-      & Dynamic graph, linh hoạt, phổ biến trong nghiên cứu \\
+      & Hỗ trợ đồ thị tính toán động, dễ xây dựng và lưu model weights cho suy luận \\
     ML Service
-      & FastAPI
-      & Async Python API, tự sinh OpenAPI docs, tích hợp PyTorch dễ \\
+      & FastAPI (Python)
+      & Lập trình async Python API hiệu năng cao, tự sinh OpenAPI docs tiện lợi \\
     Nội suy không gian
-      & Kriging/IDW
-      & Kriging tối ưu thống kê, IDW đơn giản bổ trợ biên \\
+      & Kriging / IDW
+      & Kriging tối ưu phương sai nội suy mịn, IDW bổ trợ góc biên phòng \\
     Frontend
       & React 19 + Vite
-      & Component-based, reactive UI, build nhanh \\
+      & UI dạng component dễ bảo trì, Vite HMR cập nhật tức thời khi dev \\
     Biểu đồ
       & Chart.js
-      & Nhẹ, hỗ trợ cập nhật realtime tốt \\
-    Bản đồ/Heatmap
+      & Dung lượng nhẹ, hỗ trợ render động khi có dữ liệu mới qua WebSockets \\
+    Bản đồ mặt bằng
       & Leaflet
-      & Nhẹ, mã nguồn mở, dễ tích hợp lớp heatmap tùy chỉnh \\
+      & Thư viện bản đồ tương tác mã nguồn mở nhẹ, dễ vẽ lớp heatmap tùy biến \\
     \bottomrule
   \end{tabularx}
 \end{table}
