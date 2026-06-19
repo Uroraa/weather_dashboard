@@ -9,3 +9,6 @@ dist/
 .DS_Store
 Thumbs.db
 lstm_model.pth
+.vscode/
+.kiro/
+DATN/

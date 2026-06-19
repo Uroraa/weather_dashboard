@@ -19,6 +19,7 @@ export default function Dashboard() {
         chartData,
         liveTemp,
         liveHumidity,
+        liveAqi,
         liveUpdateKey,
     } = useConnection();
 
@@ -51,11 +52,19 @@ export default function Dashboard() {
             x: { display: false, grid: { display: false } },
             y: {
                 type: 'linear', display: true, position: 'left',
+                suggestedMin: 10, suggestedMax: 45,
                 title: { display: true, text: 'Temperature (°C)', color: '#e53e3e' }
             },
             y1: {
                 type: 'linear', display: true, position: 'right',
+                min: 0, max: 100,
                 title: { display: true, text: 'Humidity (%)', color: '#3182ce' },
+                grid: { drawOnChartArea: false }
+            },
+            y2: {
+                type: 'linear', display: true, position: 'right',
+                min: 0, max: 300,
+                title: { display: true, text: 'AQI', color: '#38a169' },
                 grid: { drawOnChartArea: false }
             }
         },
@@ -74,7 +83,7 @@ export default function Dashboard() {
 
     return (
         <>
-            <div className="device-select-wrapper" style={{ position: 'absolute', top: '90px', right: '35px', zIndex: 10 }}>
+            <div className="page-selectors">
                 <label htmlFor="device-selector" style={{ margin: 0, marginRight: '0.5rem' }}>
                     <i className="ph ph-funnel"></i> View Device:
                 </label>
@@ -114,6 +123,16 @@ export default function Dashboard() {
                             <div className={`metric-value-wrapper ${liveUpdateKey % 2 === 0 ? 'value-update' : ''}`} key={`hum-${liveUpdateKey}`}>
                                 <span className="metric-value">{liveHumidity}</span>
                                 <span className="metric-unit">%</span>
+                            </div>
+                        </div>
+
+                        <div className="card metric-card">
+                            <div className="card-header">
+                                <i className="ph ph-wind"></i>
+                                <span>AQI</span>
+                            </div>
+                            <div className={`metric-value-wrapper ${liveUpdateKey % 2 === 0 ? 'value-update' : ''}`} key={`aqi-${liveUpdateKey}`}>
+                                <span className="metric-value">{liveAqi}</span>
                             </div>
                         </div>
                     </div>

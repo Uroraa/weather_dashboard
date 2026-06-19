@@ -55,7 +55,7 @@ On first startup, the application creates a `database.sqlite` file and seeds exa
 *(Has access to the "Admin Portal" navigation item, can list, downgrade or delete any user/device.)*
 
 **Regular User Account:**
-- **Email:** `user@example.com`
+- **Email:** `hson2901@gmail.com`
 - **Password:** `User123!`
 *(Has one "Office Sensor" prototype device already allocated with 30 past readings spanning the last hour).*
 

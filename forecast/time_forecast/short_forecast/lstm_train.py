@@ -9,36 +9,37 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import joblib
 
-
 WINDOW_SIZE  = 30   
 HORIZON      = 15
-INPUT_SIZE   = 2
+INPUT_SIZE   = 3
 HIDDEN_SIZE  = 64
 NUM_LAYERS   = 2
 BATCH_SIZE   = 32
-EPOCHS       = 100  # tăng lên, early stopping sẽ dừng đúng lúc
-PATIENCE     = 10   # early stopping: dừng nếu test loss không cải thiện sau 10 epoch
+EPOCHS       = 100  
+PATIENCE     = 10   
 LR           = 1e-3
 
-DB_CONFIG = {
-    "host":     "localhost",
-    "database": "weather_dashboard",
-    "user":     "postgres",
-    "password": "*Hs123456",
-}
+import os
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:*Hs123456@localhost:5432/weather_dashboard")
 
 
 # ============================================================
-# BƯỚC 1: Load dữ liệu từ PostgreSQL
+# BƯỚC 1: Load dữ liệu từ PostgreSQL (Chỉ lấy aqi != 0)
 # ============================================================
 def load_data():
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(DATABASE_URL)
+    # Filter directly in SQL to keep only rows where aqi != 0
     query = """
         SELECT
             date_trunc('minute', timestamp) AS ts,
             AVG(temperature) AS temperature,
-            AVG(humidity)    AS humidity
+            AVG(humidity)    AS humidity,
+            AVG(aqi)         AS aqi
         FROM readings
+        WHERE device_id = 6 AND aqi != 0
         GROUP BY date_trunc('minute', timestamp)
         ORDER BY ts ASC;
     """
@@ -47,7 +48,7 @@ def load_data():
 
     df.set_index("ts", inplace=True)
     df.dropna(inplace=True)
-    print(f"Tổng số mẫu sau resample: {len(df)}")
+    print(f"Tổng số mẫu (chỉ aqi != 0): {len(df)}")
     print(df.head())
     return df
 
@@ -65,11 +66,11 @@ def create_sequences(data, window_size, horizon):
 
 def preprocess(df):
     scaler = MinMaxScaler()
-    scaled = scaler.fit_transform(df[["temperature", "humidity"]])
+    scaled = scaler.fit_transform(df[["temperature", "humidity", "aqi"]])
 
     X, y = create_sequences(scaled, WINDOW_SIZE, HORIZON)
-    print(f"X shape: {X.shape}")   # (samples, 30, 2)
-    print(f"y shape: {y.shape}")   # (samples, 15, 2)
+    print(f"X shape: {X.shape}")   
+    print(f"y shape: {y.shape}")   
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, shuffle=False
@@ -103,7 +104,7 @@ class LSTMModel(nn.Module):
             hidden_size = HIDDEN_SIZE,
             num_layers  = NUM_LAYERS,
             batch_first = True,
-            dropout     = 0.3,   # tăng nhẹ từ 0.2 → 0.3 để giảm overfit
+            dropout     = 0.3,
         )
         self.fc = nn.Linear(HIDDEN_SIZE, HORIZON * INPUT_SIZE)
 
@@ -114,7 +115,7 @@ class LSTMModel(nn.Module):
 
 
 # ============================================================
-# BƯỚC 5: Train / Evaluate
+# BƯỚC 5: Train / Evaluate (Dùng Standard MSE Loss)
 # ============================================================
 def train_one_epoch(model, loader, criterion, optimizer, device):
     model.train()
@@ -125,7 +126,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         pred = model(X_batch)
         loss = criterion(pred, y_batch)
         loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # gradient clipping
+        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         total_loss += loss.item()
     return total_loss / len(loader)
@@ -150,6 +151,12 @@ if __name__ == "__main__":
     print(f"Dùng: {device}")
 
     df = load_data()
+    
+    min_required = WINDOW_SIZE + HORIZON + 1
+    if len(df) < min_required:
+        print(f"Không đủ dữ liệu: cần {min_required} mẫu, hiện có {len(df)}.")
+        exit(1)
+        
     X_train, X_test, y_train, y_test, scaler = preprocess(df)
 
     train_loader = DataLoader(SensorDataset(X_train, y_train),
@@ -192,7 +199,7 @@ if __name__ == "__main__":
                 print(f"\nEarly stopping tại epoch {epoch} — best epoch: {best_epoch} (test loss: {best_test_loss:.6f})")
                 break
 
-    print(f"\nĐã lưu model tốt nhất tại epoch {best_epoch}")
+    print(f"\nĐã lưu model tốt nhất tại epoch {best_epoch} -> lstm_model.pth")
     joblib.dump(scaler, "scaler.pkl")
     print("Đã lưu scaler.pkl")
 
@@ -203,7 +210,7 @@ if __name__ == "__main__":
     plt.axvline(x=best_epoch - 1, color="red", linestyle="--", label=f"Best epoch ({best_epoch})")
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title("Loss Curve — LSTM Multi-Horizon (6/10/15 phút)")
+    plt.title("Loss Curve (Chỉ aqi != 0) — LSTM Multi-Horizon (6/10/15 phút)")
     plt.legend()
     plt.tight_layout()
     plt.savefig("loss_curve.png")

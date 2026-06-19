@@ -10,7 +10,7 @@ import joblib
 # ============================================================
 WINDOW_SIZE  = 30
 HORIZON      = 15   # model luôn output 15 bước
-INPUT_SIZE   = 2
+INPUT_SIZE   = 3
 HIDDEN_SIZE  = 64
 NUM_LAYERS   = 2
 
@@ -21,12 +21,11 @@ HORIZON_OPTIONS = {
     "15min": 15,
 }
 
-DB_CONFIG = {
-    "host":     "localhost",
-    "database": "weather_dashboard",
-    "user":     "postgres",
-    "password": "*Hs123456",
-}
+import os
+from dotenv import load_dotenv, find_dotenv
+load_dotenv(find_dotenv())
+
+DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:*Hs123456@localhost:5432/weather_dashboard")
 
 
 # ============================================================
@@ -54,15 +53,16 @@ class LSTMModel(nn.Module):
 # Load dữ liệu mới nhất từ DB
 # ============================================================
 def load_latest(device_id=None) -> pd.DataFrame:
-    conn = psycopg2.connect(**DB_CONFIG)
-    where = f"WHERE device_id = {device_id}" if device_id else ""
+    conn = psycopg2.connect(DATABASE_URL)
+    device_filter = f"AND device_id = {device_id}" if device_id else ""
     query = f"""
         SELECT
             date_trunc('minute', timestamp) AS ts,
             AVG(temperature) AS temperature,
-            AVG(humidity)    AS humidity
+            AVG(humidity)    AS humidity,
+            AVG(aqi)         AS aqi
         FROM readings
-        {where}
+        WHERE aqi != 0 {device_filter}
         GROUP BY date_trunc('minute', timestamp)
         ORDER BY ts DESC
         LIMIT {WINDOW_SIZE};
@@ -96,19 +96,20 @@ def predict(device_id=None, horizon_key: str = "6min") -> pd.DataFrame:
 
     # Lấy dữ liệu mới nhất
     df = load_latest(device_id)
-    print(f"\nDữ liệu đầu vào ({WINDOW_SIZE} điểm gần nhất):")
-    print(df[["ts", "temperature", "humidity"]].to_string(index=False))
+    print(f"\nDữ liệu đầu vào ({WINDOW_SIZE} điểm gần nhất với aqi != 0):")
+    print(df[["ts", "temperature", "humidity", "aqi"]].to_string(index=False))
 
     # Chuẩn hóa + inference
-    scaled = scaler.transform(df[["temperature", "humidity"]])
+    scaled = scaler.transform(df[["temperature", "humidity", "aqi"]])
     X = torch.tensor(scaled, dtype=torch.float32).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        pred_scaled = model(X).squeeze(0).cpu().numpy()  # (15, 2)
+        pred_scaled = model(X).squeeze(0).cpu().numpy()  # (15, 3)
 
     # Inverse transform toàn bộ 15 bước rồi slice
-    pred_real = scaler.inverse_transform(pred_scaled)    # (15, 2)
+    pred_real = scaler.inverse_transform(pred_scaled)    # (15, 3)
     pred_real = pred_real[:steps]                        # lấy đúng số bước cần
+
 
     # Tạo timestamps
     last_ts   = df["ts"].iloc[-1]
@@ -118,6 +119,7 @@ def predict(device_id=None, horizon_key: str = "6min") -> pd.DataFrame:
         "thoi_gian": future_ts,
         "nhiet_do":  pred_real[:, 0].round(2),
         "do_am":     pred_real[:, 1].round(2),
+        "aqi":       pred_real[:, 2].round(2),
     })
 
     print(f"\nDự báo {horizon_key} tiếp theo ({steps} điểm):")
@@ -129,13 +131,15 @@ def predict(device_id=None, horizon_key: str = "6min") -> pd.DataFrame:
 # Đánh giá sai số MAE theo từng horizon
 # ============================================================
 def evaluate_real_error():
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(DATABASE_URL)
     query = """
         SELECT
             date_trunc('minute', timestamp) AS ts,
             AVG(temperature) AS temperature,
-            AVG(humidity)    AS humidity
+            AVG(humidity)    AS humidity,
+            AVG(aqi)         AS aqi
         FROM readings
+        WHERE device_id = 12 AND aqi != 0
         GROUP BY date_trunc('minute', timestamp)
         ORDER BY ts ASC;
     """
@@ -148,7 +152,7 @@ def evaluate_real_error():
     model.load_state_dict(torch.load("lstm_model.pth", map_location="cpu"))
     model.eval()
 
-    scaled = scaler.transform(df[["temperature", "humidity"]])
+    scaled = scaler.transform(df[["temperature", "humidity", "aqi"]])
     preds, actuals = [], []
 
     for i in range(len(scaled) - WINDOW_SIZE - HORIZON + 1):
@@ -156,6 +160,7 @@ def evaluate_real_error():
             scaled[i : i + WINDOW_SIZE], dtype=torch.float32
         ).unsqueeze(0)
         y_true = scaled[i + WINDOW_SIZE : i + WINDOW_SIZE + HORIZON]
+
 
         with torch.no_grad():
             y_pred = model(X).squeeze(0).numpy()
@@ -173,7 +178,8 @@ def evaluate_real_error():
         a = scaler.inverse_transform(actuals[:, steps - 1, :])
         mae_temp = np.mean(np.abs(p[:, 0] - a[:, 0]))
         mae_humi = np.mean(np.abs(p[:, 1] - a[:, 1]))
-        print(f"  [{key}] MAE nhiệt độ: {mae_temp:.3f} °C | MAE độ ẩm: {mae_humi:.3f} %")
+        mae_aqi  = np.mean(np.abs(p[:, 2] - a[:, 2]))
+        print(f"  [{key}] MAE nhiệt độ: {mae_temp:.3f} °C | MAE độ ẩm: {mae_humi:.3f} % | MAE AQI: {mae_aqi:.3f}")
 
 
 # ============================================================
