@@ -18,6 +18,15 @@ function publishDeviceConfig(mac, deviceId, apiKey) {
 
 function publishDeviceReset(mac) {
     if (!_aedes) return
+    // 1. Clear any retained config message on the broker so it doesn't get sent to new connections
+    _aedes.publish({
+        topic:   `devices/${mac}/config`,
+        payload: Buffer.from(''),
+        qos:     1,
+        retain:  true,
+    }, () => {})
+
+    // 2. Publish reset action to the current online device (non-retained)
     _aedes.publish({
         topic:   `devices/${mac}/config`,
         payload: Buffer.from(JSON.stringify({ action: 'reset' })),
@@ -176,7 +185,7 @@ async function initMqtt(io, alertService, PORT = 1883) {
     })
 
     aedes.on('clientError', (client, err) => {
-        console.log(`[MQTT] Auth error client=${client?.id}: ${err.message}`)
+        console.log(`[MQTT] Client error client=${client?.id}: ${err.message}`)
     })
 
     // ============================================================

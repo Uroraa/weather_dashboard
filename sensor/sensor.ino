@@ -1,4 +1,5 @@
 #include <WiFi.h>
+#define MQTT_KEEPALIVE 30
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include "DHT.h"
@@ -129,6 +130,7 @@ void reconnectWithAuth() {
     String mac      = getMacAddress();
     String clientId = "ESP32-" + mac;
     String username = String(deviceId);
+    int authFailCount = 0;
 
     while (!client.connected()) {
         Serial.print("Connecting MQTT with auth...");
@@ -145,18 +147,22 @@ void reconnectWithAuth() {
             // clear the stored credentials and restart to trigger re-provisioning.
             // MQTT_CONNECT_BAD_CREDENTIALS = 4, MQTT_CONNECT_UNAUTHORIZED = 5
             if (state == 4 || state == 5) {
-                Serial.println("Invalid credentials. Clearing NVS and restarting...");
-                prefs.begin("device", false);
-                prefs.remove("device_id");
-                prefs.remove("api_key");
-                prefs.end();
-                
-                WiFiManager wm;
-                wm.resetSettings();
+                authFailCount++;
+                Serial.printf("Auth failure count: %d/5\n", authFailCount);
+                if (authFailCount >= 5) {
+                    Serial.println("Invalid credentials confirmed. Clearing NVS and restarting...");
+                    prefs.begin("device", false);
+                    prefs.remove("device_id");
+                    prefs.remove("api_key");
+                    prefs.end();
 
-                // We keep mqtt_server, only remove provisioned credentials
-                delay(1000);
-                ESP.restart();
+                    // We keep mqtt_server and WiFi settings, only remove provisioned credentials.
+                    // This allows the ESP32 to automatically reconnect to WiFi and re-provision on boot.
+                    delay(1000);
+                    ESP.restart();
+                }
+            } else {
+                authFailCount = 0; // Reset counter for other transient network errors
             }
             
             delay(5000);
@@ -186,6 +192,7 @@ void setup() {
     }
 
     WiFiManager wm;
+    wm.setConnectTimeout(20);
     wm.setSaveConfigCallback(saveConfigCallback);
     WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
     wm.addParameter(&custom_mqtt_server);
