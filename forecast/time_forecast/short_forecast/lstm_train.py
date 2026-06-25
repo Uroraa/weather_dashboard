@@ -39,7 +39,7 @@ def load_data():
             AVG(humidity)    AS humidity,
             AVG(aqi)         AS aqi
         FROM readings
-        WHERE device_id = 6 AND aqi != 0
+        WHERE device_id = 12 AND aqi != 0
         GROUP BY date_trunc('minute', timestamp)
         ORDER BY ts ASC;
     """
