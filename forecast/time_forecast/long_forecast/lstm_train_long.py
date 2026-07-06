@@ -227,7 +227,7 @@ if __name__ == "__main__":
     plt.axvline(x=best_epoch - 1, color="red", linestyle="--", label=f"Best epoch ({best_epoch})")
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title(f"Loss Curve — LSTM Long Horizon (1h/3h/6h/12h/24h) — Device {DEVICE_ID}")
+    plt.title(f"Loss Curve — LSTM Long Horizon (1h/3h/6h/12h/24h)")
     plt.legend()
     plt.tight_layout()
     plt.savefig("loss_curve_long.png")
