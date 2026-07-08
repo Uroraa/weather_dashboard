@@ -102,8 +102,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
 void sendProvisionRequest() {
     String mac      = getMacAddress();
     String clientId = "provision-" + mac;
+    static int provisionConnFailCount = 0;
 
     if (client.connect(clientId.c_str())) {
+        provisionConnFailCount = 0; // Reset counter on success
         String configTopic = "devices/" + mac + "/config";
         client.subscribe(configTopic.c_str(), 1);
 
@@ -117,7 +119,41 @@ void sendProvisionRequest() {
         client.publish("devices/register", payload.c_str());
         Serial.println("[Provision] Đã gửi yêu cầu đăng ký");
     } else {
-        Serial.println("[Provision] Kết nối thất bại rc=" + String(client.state()));
+        int state = client.state();
+        Serial.println("[Provision] Kết nối thất bại rc=" + String(state));
+
+        provisionConnFailCount++;
+        Serial.printf("[Provision] MQTT failure count: %d/5\n", provisionConnFailCount);
+        if (provisionConnFailCount >= 5) {
+            Serial.println("[Provision] MQTT broker unreachable. Starting WiFiManager Config Portal...");
+
+            WiFiManager wm;
+            wm.setConfigPortalTimeout(120); // 2 minutes timeout
+            wm.setSaveConfigCallback(saveConfigCallback);
+
+            WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
+            wm.addParameter(&custom_mqtt_server);
+
+            String apName = "Sensor-Setup-" + mac;
+            apName.replace(":", "");
+
+            if (wm.startConfigPortal(apName.c_str())) {
+                Serial.println("[Provision] Config Portal succeeded!");
+                strlcpy(mqtt_server, custom_mqtt_server.getValue(), sizeof(mqtt_server));
+                if (shouldSaveConfig) {
+                    prefs.begin("device", false);
+                    prefs.putString("mqtt_server", mqtt_server);
+                    prefs.end();
+                    Serial.println("Saved new MQTT server to flash");
+                    shouldSaveConfig = false;
+                }
+                client.setServer(mqtt_server, mqtt_port);
+            } else {
+                Serial.println("[Provision] Config Portal timed out. Retrying with existing settings...");
+            }
+
+            provisionConnFailCount = 0; // Reset counter
+        }
     }
 }
 
@@ -131,6 +167,7 @@ void reconnectWithAuth() {
     String clientId = "ESP32-" + mac;
     String username = String(deviceId);
     int authFailCount = 0;
+    static int connFailCount = 0;
 
     while (!client.connected()) {
         Serial.print("Connecting MQTT with auth...");
@@ -139,6 +176,7 @@ void reconnectWithAuth() {
                            deviceApiKey.c_str())) { // password = api_key (trong CONNECT packet)
             Serial.println(" OK");
             client.subscribe(("devices/" + mac + "/config").c_str(), 1);
+            connFailCount = 0; // Reset counter on success
         } else {
             int state = client.state();
             Serial.println(" failed rc=" + String(state) + " — retry 5s");
@@ -163,6 +201,40 @@ void reconnectWithAuth() {
                 }
             } else {
                 authFailCount = 0; // Reset counter for other transient network errors
+                
+                // Track network/connection failures (like rc=-2)
+                connFailCount++;
+                Serial.printf("MQTT connection failure count: %d/5\n", connFailCount);
+                if (connFailCount >= 5) {
+                    Serial.println("MQTT broker unreachable. Starting WiFiManager Config Portal...");
+
+                    WiFiManager wm;
+                    wm.setConfigPortalTimeout(120); // 2 minutes timeout
+                    wm.setSaveConfigCallback(saveConfigCallback);
+
+                    WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
+                    wm.addParameter(&custom_mqtt_server);
+
+                    String apName = "Sensor-Setup-" + mac;
+                    apName.replace(":", "");
+
+                    if (wm.startConfigPortal(apName.c_str())) {
+                        Serial.println("Config Portal succeeded!");
+                        strlcpy(mqtt_server, custom_mqtt_server.getValue(), sizeof(mqtt_server));
+                        if (shouldSaveConfig) {
+                            prefs.begin("device", false);
+                            prefs.putString("mqtt_server", mqtt_server);
+                            prefs.end();
+                            Serial.println("Saved new MQTT server to flash");
+                            shouldSaveConfig = false;
+                        }
+                        client.setServer(mqtt_server, mqtt_port);
+                    } else {
+                        Serial.println("Config Portal timed out. Retrying with existing settings...");
+                    }
+
+                    connFailCount = 0; // Reset counter after portal attempts
+                }
             }
             
             delay(5000);

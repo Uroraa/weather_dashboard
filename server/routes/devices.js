@@ -163,22 +163,61 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 // --- Data Endpoints for Frontend (Reading data per device) ---
 
 // Get last 30 readings for a device
+// Get last readings for a device (supports optional granularity=hour)
 router.get('/:id/readings', optionalAuthenticateToken, async (req, res) => {
     try {
         const deviceId = req.params.id;
         const limit = parseInt(req.query.limit) || 30;
+        const granularity = req.query.granularity; // 'hour' or 'minute'
 
         const deviceRes = await db.query('SELECT id FROM devices WHERE id = $1', [deviceId]);
         const device = deviceRes.rows[0];
         if (!device) return res.status(404).json({ error: 'Device not found' });
 
-        const recentReadingsRes = await db.query(`
-            SELECT * FROM (
-                SELECT * FROM readings WHERE device_id = $1 ORDER BY timestamp DESC LIMIT $2
-            ) sub ORDER BY timestamp ASC
-        `, [deviceId, limit]);
+        let queryText = '';
+        let queryParams = [];
 
-        res.json(recentReadingsRes.rows);
+        if (granularity === 'hour') {
+            queryText = `
+                SELECT * FROM (
+                    SELECT 
+                        date_trunc('hour', timestamp) AS timestamp,
+                        AVG(temperature) AS temperature,
+                        AVG(humidity) AS humidity,
+                        AVG(aqi) AS aqi
+                    FROM readings 
+                    WHERE device_id = $1 
+                    GROUP BY date_trunc('hour', timestamp)
+                    ORDER BY timestamp DESC 
+                    LIMIT $2
+                ) sub ORDER BY timestamp ASC
+            `;
+            queryParams = [deviceId, limit];
+        } else {
+            queryText = `
+                SELECT * FROM (
+                    SELECT id, device_id, temperature, humidity, aqi, timestamp 
+                    FROM readings 
+                    WHERE device_id = $1 
+                    ORDER BY timestamp DESC 
+                    LIMIT $2
+                ) sub ORDER BY timestamp ASC
+            `;
+            queryParams = [deviceId, limit];
+        }
+
+        const recentReadingsRes = await db.query(queryText, queryParams);
+        
+        // Ensure values are properly parsed to numeric floats and clean objects returned
+        const rows = recentReadingsRes.rows.map(r => ({
+            ...r,
+            temperature: r.temperature !== null ? parseFloat(r.temperature) : null,
+            humidity: r.humidity !== null ? parseFloat(r.humidity) : null,
+            aqi: r.aqi !== null ? parseFloat(r.aqi) : null,
+            timestamp: r.timestamp
+        }));
+
+        res.json(rows);
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: 'Internal server error' });

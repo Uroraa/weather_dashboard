@@ -32,10 +32,14 @@ const FORECAST_HORIZONS = [
   { value: '24h',   minutes: 1440, label: '24 hours' },
 ];
 
-const formatHourOnly = (timestampStr) => {
+const formatTimestamp = (timestampStr, isHourly) => {
   if (!timestampStr) return '';
   const date = new Date(timestampStr);
-  return `${date.getHours().toString().padStart(2, '0')}h`;
+  if (isHourly) {
+    return `${date.getHours().toString().padStart(2, '0')}h`;
+  } else {
+    return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+  }
 };
 
 function lerp(a, b, t) { return a + (b - a) * t; }
@@ -203,6 +207,10 @@ export default function Forecast() {
   const tileTooltipRef = useRef(null);
   const deviceTooltipRef = useRef(null);
   const [dataFlash, setDataFlash] = useState(false);
+
+  // States for data stale/outdated warning banners
+  const [isChartDataOld, setIsChartDataOld] = useState(false);
+  const [lastReadingTime, setLastReadingTime] = useState('');
   const [toast, setToast] = useState(null);
 
   const [rooms, setRooms] = useState([]);
@@ -250,6 +258,21 @@ export default function Forecast() {
       ].filter(Boolean)
     : [];
 
+  const isSpatialDataOld = React.useMemo(() => {
+    if (!selectedRoom || devices.length === 0) return false;
+    const roomDevs = devices.filter(d => d.room_id === parseInt(selectedRoom));
+    if (roomDevs.length === 0) return true;
+
+    const now = new Date().getTime();
+    const threshold = 5 * 60000; // 5 minutes
+
+    return roomDevs.some(d => {
+      if (!d.last_reading) return true;
+      const lastTime = new Date(d.last_reading).getTime();
+      return (now - lastTime > threshold);
+    });
+  }, [selectedRoom, devices]);
+
   const sliceIdx = spatialHorizons[spatialHorizonStep]?.idx ?? 0;
 
   useEffect(() => {
@@ -260,16 +283,16 @@ export default function Forecast() {
     ])
     .then(([devData, roomData]) => {
       setDevices(devData);
-      if (devData.length > 0) setSelectedDevice(devData[0].id.toString());
+      setSelectedDevice(prev => prev || (devData.length > 0 ? devData[0].id.toString() : ''));
       setRooms(roomData);
-      if (roomData.length > 0) setSelectedRoom(roomData[0].id.toString());
+      setSelectedRoom(prev => prev || (roomData.length > 0 ? roomData[0].id.toString() : ''));
     })
     .catch(() => {
       setDevices([]);
       setRooms([]);
     })
     .finally(() => setLoading(false));
-  }, [isAuthenticated, apiFetch]);
+  }, [isAuthenticated, apiFetch, refreshKey]);
 
   useEffect(() => {
     setActiveDeviceId(selectedDevice || null);
@@ -309,10 +332,35 @@ export default function Forecast() {
     setChartData(null);
     setInsufficientData(false);
 
-    apiFetch(`/api/devices/${selectedDevice}/readings?limit=30`)
+    const isHourly = ['1h', '3h', '6h', '12h', '24h'].includes(horizon);
+    const limit = isHourly ? 48 : 30;
+    const granularity = isHourly ? 'hour' : 'minute';
+
+    apiFetch(`/api/devices/${selectedDevice}/readings?limit=${limit}&granularity=${granularity}`)
       .then(r => r.ok ? r.json() : Promise.reject(new Error('Failed to load readings')))
       .then(readings => {
         if (readings.length < MIN_WINDOW) { setInsufficientData(true); return; }
+        
+        // Calculate outdation & gaps
+        const threshold = isHourly ? 120 * 60000 : 5 * 60000; // 120 min for hourly, 5 min for minute
+        const now = new Date().getTime();
+        const lastReading = readings[readings.length - 1];
+        const lastTime = new Date(lastReading.timestamp).getTime();
+        
+        let hasGaps = false;
+        for (let i = 1; i < readings.length; i++) {
+          const t1 = new Date(readings[i - 1].timestamp).getTime();
+          const t2 = new Date(readings[i].timestamp).getTime();
+          if (t2 - t1 > threshold) {
+            hasGaps = true;
+            break;
+          }
+        }
+        
+        const isOld = (now - lastTime > threshold) || hasGaps;
+        setIsChartDataOld(isOld);
+        setLastReadingTime(new Date(lastReading.timestamp).toLocaleString());
+
         return apiFetch(`/api/forecast?device_id=${selectedDevice}&horizon=${horizon}`)
           .then(r => r.ok ? r.json() : Promise.reject(new Error('Forecast service unavailable')))
           .then(forecastRes => {
@@ -323,9 +371,9 @@ export default function Forecast() {
             const lastAqi  = readings[readings.length - 1].aqi;
             setChartData({
               labels: [
-                ...readings.map(r => formatHourOnly(r.timestamp)),
+                ...readings.map(r => formatTimestamp(r.timestamp, isHourly)),
                 'Now',
-                ...forecast.map(f => formatHourOnly(f.timestamp))
+                ...forecast.map(f => formatTimestamp(f.timestamp, isHourly))
               ],
               datasets: [
                 {
@@ -336,18 +384,18 @@ export default function Forecast() {
                   fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y'
                 },
                 {
-                  label: 'Humidity — History (%)',
-                  data: [...readings.map(r => r.humidity), lastHum, ...nullArr(forecast.length)],
-                  borderColor: '#3182ce', backgroundColor: 'rgba(49,130,206,0.08)',
-                  borderWidth: 2, pointRadius: 2, pointHoverRadius: 5,
-                  fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y1'
-                },
-                {
                   label: 'Temperature — Forecast (°C)',
                   data: [...nullArr(readings.length), lastTemp, ...forecast.map(f => f.temperature)],
                   borderColor: 'rgba(229,62,62,0.75)', backgroundColor: 'rgba(229,62,62,0.04)',
                   borderWidth: 2, borderDash: [6, 4], pointRadius: 3, pointHoverRadius: 5,
                   fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y'
+                },
+                {
+                  label: 'Humidity — History (%)',
+                  data: [...readings.map(r => r.humidity), lastHum, ...nullArr(forecast.length)],
+                  borderColor: '#3182ce', backgroundColor: 'rgba(49,130,206,0.08)',
+                  borderWidth: 2, pointRadius: 2, pointHoverRadius: 5,
+                  fill: true, tension: 0.4, spanGaps: false, yAxisID: 'y1'
                 },
                 {
                   label: 'Humidity — Forecast (%)',
@@ -544,6 +592,27 @@ export default function Forecast() {
               <div className="chart-container">
                 <Line data={chartData} options={chartOptions} plugins={[nowLinePlugin]} />
               </div>
+              {isChartDataOld && (
+                <div style={{
+                  marginTop: '1rem',
+                  padding: '0.75rem 1rem',
+                  borderRadius: '0.5rem',
+                  backgroundColor: 'rgba(221, 107, 32, 0.08)',
+                  border: '1px solid rgba(221, 107, 32, 0.2)',
+                  color: '#dd6b20',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.65rem',
+                  fontSize: '0.85rem',
+                  fontWeight: '500',
+                  lineHeight: '1.4'
+                }}>
+                  <i className="ph ph-warning-circle" style={{ fontSize: '1.25rem', flexShrink: 0 }}></i>
+                  <span>
+                    <strong>Demo Warning:</strong> Forecast is generated using historical data (last recorded: {lastReadingTime}). The device is currently offline or data is not continuous.
+                  </span>
+                </div>
+              )}
             </div>
           ) : null
         )}
@@ -1073,6 +1142,27 @@ export default function Forecast() {
                     </>
                   )}
                 </div>
+                {isSpatialDataOld && (
+                  <div style={{
+                    marginTop: '1rem',
+                    padding: '0.75rem 1rem',
+                    borderRadius: '0.5rem',
+                    backgroundColor: 'rgba(221, 107, 32, 0.08)',
+                    border: '1px solid rgba(221, 107, 32, 0.2)',
+                    color: '#dd6b20',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.65rem',
+                    fontSize: '0.85rem',
+                    fontWeight: '500',
+                    lineHeight: '1.4'
+                  }}>
+                    <i className="ph ph-warning-circle" style={{ fontSize: '1.25rem', flexShrink: 0 }}></i>
+                    <span>
+                      <strong>Demo Warning:</strong> One or more devices in this room are offline or have data gaps. Heatmap displays historical simulation.
+                    </span>
+                  </div>
+                )}
               </>
             ) : null}
           </div>
