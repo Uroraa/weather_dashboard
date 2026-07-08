@@ -264,11 +264,11 @@ void setup() {
     }
 
     WiFiManager wm;
-    wm.setConnectTimeout(20);
+    wm.setConnectTimeout(5);
     wm.setSaveConfigCallback(saveConfigCallback);
     WiFiManagerParameter custom_mqtt_server("server", "mqtt server", mqtt_server, 40);
     wm.addParameter(&custom_mqtt_server);
-    wm.setTimeout(20); // portal timeout in seconds
+    // Removed wm.setTimeout(20) to ensure the boot portal has no timeout and runs indefinitely.
 
     String mac = getMacAddress();
     mac.replace(":", "");
