@@ -481,11 +481,13 @@ input:focus, select:focus, textarea:focus {
     backdrop-filter: blur(4px);
     display: flex;
     justify-content: center;
-    align-items: center;
+    align-items: flex-start;
     z-index: 200;
     opacity: 0;
     pointer-events: none;
     transition: var(--transition);
+    overflow-y: auto;
+    padding: 2rem 1rem;
 }
 
 .modal-overlay.active {
@@ -502,6 +504,7 @@ input:focus, select:focus, textarea:focus {
     box-shadow: var(--shadow-md);
     transform: translateY(20px);
     transition: var(--transition);
+    margin: auto;
 }
 
 .modal-overlay.active .modal-content {
